@@ -1,0 +1,4688 @@
+/*~BB~************************************************************************
+      *                                                                      *
+      *  Copyright Notice:  (c) 1983 Laboratory Information Systems &        *
+      *                              Technology, Inc.                        *
+      *       Revision      (c) 1984-2010 Cerner Corporation                 *
+      *                                                                      *
+      *  Cerner (R) Proprietary Rights Notice:  All rights reserved.         *
+      *  This material contains the valuable properties and trade secrets of *
+      *  Cerner Corporation of Kansas City, Missouri, United States of       *
+      *  America (Cerner), embodying substantial creative efforts and        *
+      *  confidential information, ideas and expressions, no part of which   *
+      *  may be reproduced or transmitted in any form or by any means, or    *
+      *  retained in any storage or retrieval system without the express     *
+      *  written permission of Cerner.                                       *
+      *                                                                      *
+      *  Cerner is a registered mark of Cerner Corporation.                  *
+      *                                                                      *
+  ~BE~***********************************************************************/
+/*****************************************************************************
+        Source file name: chla_ca_mp_rw_fo_json.prg                          *
+        Object name:      chla_ca_mp_rw_fo_json                              *
+        Program purpose:  Return OP Rad worklist for RL mPage                *
+        Executing from:   MPages                                             *
+        Notes:            Client-supplied                                    *
+*****************************************************************************/
+;~DB~************************************************************************
+;    *                      GENERATED MODIFICATION CONTROL LOG              *
+;    ************************************************************************
+;    *                                                                      *
+;    *Mod      Date     Engineer             Comment                        *
+;    *-------  -------- -------------------- -------------------------------*
+;    *01.00.00 07/17/17 mburling             prod qa Release                *
+;    *01.01.00 07/28/17 mburling             auto relink                    *
+;    *01.02.00 08/03/17 mburling             link 0 encounter id            *
+;    *01.03.00 09/13/17 mburling             slowness of future view        *
+;    *01.03.01 11/08/17 mburling             truncation of clininfo corrected
+;    *01.04.00 10/31/17 mburling             order id /order desc concat    *
+;    *01.06.00 03/15/18 mburling             Intro of New table schema      *
+;    *01.06.01 03/16/18 mburling             Fix for New Linked Records     *
+;    *01.06.02 03/23/18 mburling             ADDED ACTIVE PAT TYPES         *
+;    *01.06.02 03/26/18 mburling             MOD ORD CANCEL FUNCT           *
+;    *01.06.03 04/02/18 mburling             MOD STAT override lockout      *
+;    *01.07.00 04/25/18 mburling             body/nuero filter consults     *
+;                                            additional cardiac sorting     *
+;    *02.00.00 05/17/18 mburling             UI v2 changes not Active view  *
+;    *02.00.01 06/19/18 mburling             break-fix auto-relink bug      *
+;    *02.01.01 07/02/18 mburling             CORRECT MODIFY1 LOCKOUT        *
+;    *02.02.00 07/05/18 mburling             remove fl-vcug orders          *
+;    *                                       updated stat lockout           *
+;    *02.03.04 04/30/19 mburling             reestablish version baseline   *
+;    *02.03.05 04/30/19 mburling             removed outofSeq testing       *
+;    *02.03.06 04/30/19 mburling             commentted out of ordercancelled
+;    *                                       97 and 98 type processng       *
+;    *02.03.07 05/03/19 mburling             CT/MR filter 04/26/2019        *
+;    *02.06.00 04/01/19 MBURLING             SRORDCNL                       *
+;    *                                       SRMDORD                        *
+;    *                                       SRLDFO                         *
+;    *                                       SRARLK                         *
+;    *                                       FuncOper 0,1,3,5
+; 	 *020	   07/14/19 Sam Shaik			 'ORDERSTATE' in the table 		   *
+;											 CUST_OPRDWL_ORD is case sensitive *
+;											 uar_display(order_status_cd) 	   *
+;											 converted to uppercase			   *
+;											 converted to uppercase			   *
+;    ;02.07.00 07/19/19                      EP,NP section detect F = 9     *
+;	 *02.07.02 08/02/19 Sam Shaik            Populating PFORM ID field with *
+;											 the GRP_PF_ID so all the Orders*
+; 											 grouped for Mass Protocol has  *
+;											the same Powerform ID associated*
+;	 *02.07.03 08/08/19  mburling            bug fix for mp unlinkking            *
+;    *02.08.00 09/20/19  mburling            revised MP logic refactored pilot *
+;~DE~***************************************************************************
+;~END~ ******************  END OF ALL MODCONTROL BLOCKS  ***********************
+DROP PROGRAM    CHLA_CA_MP_RW_FO_JSON:DBA  GO
+CREATE PROGRAM  CHLA_CA_MP_RW_FO_JSON:DBA
+ 
+prompt
+	"Output to File/Printer/MINE" = "MINE"
+	, "Function Operation Selector" = 99
+	, "Start Date Range" = ""
+	, "End Date Range" = ""
+	, "Start Date Range2" = ""
+	, "End Date Range2" = ""
+	, "Future Order State" = "NEW"
+	, "Specific Order ID" = 0.0
+	, "Linkage Pair" = ""
+	, "Order in Protocol State" = ""
+	, "Encounter ID" = 0
+	, "ORDER ID" = 0
+	, "PowerForm Id" = 0
+	, "Person Id" = 0
+	, "User ID" = 0
+ 
+with OUTDEV, FUNCOPER, SDATE, EDATE, SDATE2, EDATE2, FOSTATE, SELORDID, LNKPAIR,
+	ARRORDERS, ENCTRID, ORDERID, PFORMID, PERSONID, USERID
+ 
+DECLARE LAST_MOD                   = VC WITH PUBLIC
+DECLARE DEBUG_REPLY_STRING         = VC WITH PUBLIC
+DECLARE DEBUG_CTL_FLAG             = I2 WITH PUBLIC
+DECLARE COUNTDOWN                  = I2 WITH PUBLIC
+DECLARE RADACT      = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY",   106, "RADIOLOGY"))
+DECLARE ORDSTORD    = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 14281, "ORDERED"))
+DECLARE ORDSTEXORD  = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 14281, "EXAMORDERED"))
+DECLARE ORDSTEXSTR  = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("MEANING",    14281, "RADSTARTED"))
+DECLARE ORDSTINPRC  = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("MEANING",    14281, "LABINPROCESS"))
+DECLARE MEDCALWTCD  = F8 WITH PUBLIC, CONSTANT( 718439.0 )
+DECLARE ROUTWTCD    = F8 WITH PUBLIC, CONSTANT( 687644.0 )
+DECLARE HTCD        = F8 WITH PUBLIC, CONSTANT( 671600.0 )
+DECLARE PRECCD      = F8 WITH PUBLIC, CONSTANT( 55033911.0 )
+DECLARE EVTCLSCD    = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,53, "TXT" ))
+DECLARE ATHRSLTSTCD = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("MEANING" ,   8 ,"AUTH" ))
+DECLARE MODRSLSTCD  = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("MEANING" ,   8, "MODIFIED" ))
+DECLARE ALTRSLSTCD  = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("MEANING" ,   8, "ALTERED" ))
+DECLARE OPCD 		= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,71,"1XOP" ))
+DECLARE IPCD  		= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,71,"INPATIENT" ))
+DECLARE EMRGCD  	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,71,"EMERGENCY" ))
+DECLARE PADTCD   	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,71,"PREADMIT" ))
+DECLARE QUERCD   	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,71,"QUICKER" ))
+DECLARE RHBIPCD   	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,71,"REHAPIP" ))
+DECLARE KIDSCARCD  	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,71,"KIDSCARE" ))
+ 
+;DECLARE EPPFRFID   	= F8 WITH PUBLIC, CONSTANT( 287650320.00 )
+DECLARE EPPFRFID   	= F8 WITH PUBLIC, CONSTANT( 1327722665.00 )
+DECLARE IRPFREFID   = F8 WITH PUBLIC, CONSTANT( 1218181603.00 )
+;DECLARE IRPFREFID   = F8 WITH PUBLIC , CONSTANT ( 947681603.00 ) ;IR Exam protocol B1345
+ 
+DECLARE ORDUSSBTYP 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,5801,"ULTRASOUND" ))
+DECLARE ORDFLSBTYE 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,5801,"FLUOROSCOPY" ))
+DECLARE ORDCTSBTYP 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,5801,"COMPUTERIZEDTOMOGRAPHY" ))
+DECLARE ORDIRSBTYP 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,5801,"INTERVENTIONALRADIOLOGY " ))
+DECLARE ORDMRSBTYP 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,5801,"MAGNETICRESONANCEIMAGING " ))
+DECLARE ORDPTSBTYP 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,5801,"PET " ))
+DECLARE ORDNMSBTYP 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY" ,5801,"NUCLEARMEDICINE " ))
+ 
+DECLARE ORDENCIDCD  = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY",16449,"FUTUREORDERENCOUNTERID"))
+DECLARE PRIORCD     = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY",16449,"PRIORITYCHLA"))
+DECLARE REQDTTMCD 	= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY",16449,"REQUESTEDSTARTDATETIME"))
+DECLARE ORDLOCCD    = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY",16449,"ORDER LOCATION"))
+DECLARE STPDTTMCD   = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY",16449,"STOP DATE/TIME"))
+DECLARE EXPDTTMCD   = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY",16449,"EXPIREDDATEANDTIME"))
+DECLARE ORGORDDTCD  = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY ("DISPLAYKEY",16449,"ORIGINALORDERDATE"))
+ 
+DECLARE SELORDERID  = F8 WITH PUBLIC
+DECLARE MPORDIDX  	= I4 WITH PUBLIC
+/**************************************************************
+* DVDev DECLARED POWERFORM CODE SET VALUE                     *
+**************************************************************/
+DECLARE PROTSTCD    = F8 WITH PUBLIC , CONSTANT ( UAR_GET_CODE_BY("DISPLAYKEY", 72, "CALCULATEDPROTOCOLSTATUS"))
+DECLARE ALTFLGCD    = F8 WITH PUBLIC , CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY", 72, "ALERTFLAG"))
+DECLARE RDORDIDCD   = F8 WITH PUBLIC,  CONSTANT (UAR_GET_CODE_BY ("DISPLAYKEY",72, "RADIOLOGYORDERID" ))
+DECLARE RADDISCD  = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",16449,"CONTRASTPERRADIOLOGISTSDISCRETION"))
+DECLARE IVCTRSTL24h_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"IVCONTRASTINTHELAST24HOURS"))
+DECLARE REACTCNTRST_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"REACTIONTOCONTRAST"))
+DECLARE PHEOTUMOR_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"PHEOCHROMOCYTOMAADRENALTUMOR"))
+DECLARE GLUCOFORMIN_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"GLUCOPHAGEMETFORMIN"))
+DECLARE SICKLECELL_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"SICKLECELLANEMIA"))
+DECLARE HEARTFAILURE_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"HEARTDISEASEFAILURE"))
+DECLARE SMLBWELTRANS_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"SMALLBOWELTRANSPLANT"))
+DECLARE KIDNEYPRBLMS_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"KIDNEYPROBLEMS"))
+DECLARE RENALFAILURE_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"RENALFAILURE"))
+DECLARE DIALYSIS_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"DIALYSIS"))
+DECLARE RADMETHTRXATE_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"RADMETHOTREXATE"))
+DECLARE RADCISPLATIN_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"RADCISPLATIN"))
+DECLARE ASTHMAHISTORY_CD = F8 WITH PUBLIC, CONSTANT (UAR_GET_CODE_BY("DISPLAYKEY",72,"ASTHMAHISTORY"))
+DECLARE EPMODIFY_CD = F8 WITH PUBLIC,  CONSTANT( UAR_GET_CODE_BY ("DISPLAYKEY" ,72  , "EXAMPROTOCOLMODIFY" ))
+DECLARE EPMODIFY_CMT_CD = F8 WITH PUBLIC,  CONSTANT( UAR_GET_CODE_BY ("DISPLAYKEY" ,72  , "EXAMPROTOCOLMODIFYCOMMENTS" ))
+DECLARE IVCONTRAST_CD      = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DESCRIPTION", 72, "IV Contrast"))
+DECLARE IVCONTRAST2_CD     = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DESCRIPTION",72, "+/- IV Contrast"))
+DECLARE IVCONTRASTCT_CD    = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DESCRIPTION",72, "IV Contrast CT"))
+DECLARE IVCONTRASTCTYES_CD = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DESCRIPTION",72, "IV Contrast CT, Yes"))
+DECLARE IVCONTRASTCT2_CD   = F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DESCRIPTION",72, "+/- IV Contrast CT"))
+DECLARE IVCONTRASTCT2YES_CD= F8 WITH PUBLIC, CONSTANT(UAR_GET_CODE_BY("DESCRIPTION",72, "+/- IV Contrast CT, Yes"))
+DECLARE SPECIALPROTOCOLINSTRUCTIONS_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "SPECIALPROTOCOLINSTRUCTIONS"))
+DECLARE SCHEDULINGDETAILS_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "SCHEDULINGDETAILS"))
+DECLARE EXAMPROTOCOLCOMPLETE_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "EXAMPROTOCOLCOMPLETE"))
+DECLARE EXAMPROTOCOLMODIFY_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "EXAMPROTOCOLMODIFY"))
+DECLARE NURSETECHCOMPLETE_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NURSETECHCOMPLETE"))
+DECLARE NURSETECHMODIFY_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NURSETECHMODIFY"))
+DECLARE SCHEDULECOMPLETE_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "SCHEDULECOMPLETE"))
+DECLARE SCHEDULEMODIFY_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "SCHEDULEMODIFY"))
+DECLARE NPCOMPLETE_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NPCOMPLETE"))
+DECLARE NPMODIFY_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NPMODIFY"))
+DECLARE EXAMPROTOCOLPROVIDER_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "EXAMPROTOCOLPROVIDER"))
+DECLARE NPPROTROCOLPROVIDER_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NPPROTROCOLPROVIDER"))
+DECLARE SCHEDULEDWITH_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "SCHEDULEDWITH"))
+DECLARE NURSETECHNOLOGIST_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NURSETECHNOLOGIST"))
+DECLARE RADEXPROTPROVCD = F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY",72,"RADIOLOGYEXAMPROTOCOLPROVIDER"))
+DECLARE RESCHEDCNLREASCD = F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "RESCHEDULECANCELREASONS"))
+DECLARE ALERTFLAG_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "ALERTFLAG"))
+DECLARE MRIROOM_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "MRIROOM"))
+DECLARE CTROOM_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "CTROOM"))
+DECLARE ORALCONTRAST_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "ORALCONTRAST"))
+DECLARE PATIENTNEEDSXRAY_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "PATIENTNEEDSXRAY"))
+DECLARE PATIENTNEEDSXRAYCOMMENT_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "PATIENTNEEDSXRAYCOMMENT"))
+DECLARE STUDYINSYNAPSE_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "STUDYINSYNAPSE"))
+DECLARE STUDYINSYNAPSEDATE_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "STUDYINSYNAPSEDATE"))
+DECLARE OUTSIDESTUDYREQUIRED_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "OUTSIDESTUDYREQUIRED"))
+DECLARE OUTSIDESTUDYREQUIREDCOMMENT_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "OUTSIDESTUDYREQUIREDCOMMENT"))
+DECLARE EXAMPROTOCOLMODIFYCOMMENTS_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "EXAMPROTOCOLMODIFYCOMMENTS"))
+DECLARE NPMODIFYCOMMENTS_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NPMODIFYCOMMENTS"))
+DECLARE NURSETECHMODIFYCOMMENTS_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NURSETECHMODIFYCOMMENTS"))
+DECLARE SCHEDULEMODIFYCOMMENTS_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "SCHEDULEMODIFYCOMMENTS"))
+DECLARE RADIOLOGYEXAMPROTOCOL_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "RADIOLOGYEXAMPROTOCOL"))
+DECLARE VERBALPROTOCOL_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "VERBALPROTOCOL"))
+DECLARE VERBALPROTOCOLBY_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "VERBALPROTOCOLBY"))
+DECLARE ASALEVEL_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "ASALEVEL"))
+DECLARE ORALCONTRASTCT_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "ORALCONTRASTCT"))
+DECLARE ORALCONTRASTCTYES_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "ORALCONTRASTCTYES"))
+DECLARE RADIOLOGYWORKLISTCOMMENTS_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "RADIOLOGYWORKLISTCOMMENTS"))
+DECLARE RADIOLOGYORDERID_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "RADIOLOGYORDERID"))
+DECLARE CHANGEDRADIOLOGYORDERID_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "CHANGEDRADIOLOGYORDERID"))
+DECLARE RADIOLOGISTONHOLDREASON_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "RADIOLOGISTONHOLDREASON"))
+DECLARE NPONHOLDREASON_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NPONHOLDREASON"))
+DECLARE NPONHOLDCOMMENT_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "NPONHOLDCOMMENT"))
+DECLARE RADIOLOGISTPRIORITY_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "RADIOLOGISTPRIORITY"))
+DECLARE SECONDARYTRIAGE_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "SECONDARYTRIAGE"))
+DECLARE MRIIVCONTRAST_CD= F8 WITH PUBLIC,CONSTANT(UAR_GET_CODE_BY("DISPLAYKEY", 72, "MRIIVCONTRAST"))
+/**************************************************************
+* DVDev DECLARED GENERAL USE VARIABLES                        *
+**************************************************************/
+ 
+DECLARE MPCNT 	 = I4 WITH PUBLIC
+DECLARE MPORDBID = F8 WITH PUBLIC
+/**************************************************************
+* DVDev DECLARED SUBROUTINES                                  *
+**************************************************************/
+DECLARE  SRLDFO((NULL)) = NULL
+DECLARE  SRLDFOLIM((NULL)) = NULL
+DECLARE  SRLDPRS (IDPERSON = F8 ) = NULL
+DECLARE  SRLDFOSPC( IDORDER = F8 )= NULL
+DECLARE  SRLDLKORDSPC (LINKEDORDER = F8 ) = NULL
+DECLARE  SRLDLKORD (NULL) = NULL
+DECLARE  SRLDLKORDAR3 (NULL) = NULL
+DECLARE  SRLDRCDAT  (NULL) = NULL
+DECLARE  SRLFODAT (NULL) = NULL
+DECLARE  SRLFODAT2 (NULL) = NULL
+;DECLARE  SRLDFOCLNDAT(IND = I4 ) = NULL
+DECLARE  SRPF (PID = F8 ,EID = F8, SORDIDX = I2) = NULL
+DECLARE  SRPFACTIVE (PID = F8 ,EID = F8, SORDIDX = I2) = NULL
+DECLARE  SRPF_PROT (NULL)= NULL
+DECLARE  SRLDACTORDS((NULL)) = NULL
+DECLARE  SRLDAOCLNDAT(NULL) = NULL
+DECLARE  SRLDRETDAT  ( NULL) = NULL
+DECLARE  SRLDCTBL (IDX = I4 ) = NULL
+DECLARE  SRORDCNL ( NULL ) = NULL
+DECLARE  SRMDCT ( NULL ) = NULL
+DECLARE  SRARLK ( NULL) = NULL
+DECLARE  SRUPTCTBL (IDX = I4) = NULL
+ 
+RECORD  RPTDATA  (
+1  PROGVER_CHLA             = VC
+1  ERR_STAT                 = VC
+1  ERR_DET_CNT              = I4
+1  ERR_DETAIL [*]
+  2   ERR_ITEM              = VC
+1  USERID                   = F8
+1  FNCRESP_CD               = F8
+1  FNCRESP_DETAIL           = VC
+1  FOSTATE                  = VC
+1  FNOPER                   = I2
+1  SCHORDER_CNT             = I2
+1  SCHORDERS   [*]
+  2  ORDERID                = F8
+  2  EXCLUD_FLAG            = F8
+  2  PRIORITY               = VC
+  2  ENCNTRID               = F8
+  2  PERSONID               = F8
+  2  ORDER_DESC             = VC
+  2  ORDER_STATUS           = VC
+  2  MODTYPE                = F8
+  2  SUBTYPE_CD             = F8
+  2  CATALOG_CD             = F8
+  2  DEPT_STATUS            = VC
+  2  NAME_FULL_FORMATTED    = VC
+  2  MRN                    = VC
+  2  DOB                    = VC
+  2  AGE                    = VC
+  2  WEIGHT                 = VC
+  2  HEIGHT                 = VC
+  2  ORDER_LOC              = VC
+  2  ORDER_PROVIDER         = VC
+  2  BEGIN_DT               = VC
+  2  END_DT                 = VC
+  2  EXPIRE_DT              = VC
+  2  DATE_ORDERED           = VC
+  2  DATE_REQUESTED         = VC
+  2  ALERT_FLAG             = VC
+  2  MODIFY_FLAG            = VC
+  2  PROTOCAL_STATUS        = VC
+  2  PROTOCAL_STAT_LVL      = I4
+  2  CSA_CTRIND_FORM_ACT_ID = F8
+  2  ORDER_CLIN_DISP_LINE   = VC
+  2  PROTOCOL_DATE_MODIFIED = VC
+  2  FORM_ACTIVITY_ID       = F8
+  2  EXAM_FORM_ID           = F8
+  2  EP_REORDER_DAYS        = F8
+  2  EP_REORDER_FLAG        = VC
+  2  EP_REORDER_CHGS        = VC
+  2  EP_HOLD_STATUS         = VC
+  2  EP_HOLD_STATUSID       = VC
+  2  EP_HOLD_STATUS2        = VC
+  2  EP_HOLD_STATUSID2      = VC
+  2  EP_HOLD_SPEC_PROTOCOL  = VC
+  2  EP_HOLD_SPEC_PROTOCOLID = VC
+  2  EP_MODIFY_FLAG         = VC
+  2  EP_MODIFY_CMT          = VC
+  2  EP_MODIFY_CMTID        = VC
+  2  NP_HOLD_STATUS         = VC
+  2  NP_HOLD_STATUSID       = VC
+  2  NP_HOLD_CMT            = VC
+  2  NP_HOLD_CMTID          = VC
+  2  NP_CLR                 = VC
+  2  NP_CLRID               = VC
+  2  NP_MODIFY_CMT          = VC
+  2  NP_MODIFY_CMTID        = VC
+  2  RAD_DISCRETION         = VC
+  2  SEDATION               = VC
+  2  ODDIAGNOSIS            = VC
+  2  PREGNANT               = VC
+  2  CLININFO               = VC
+  2  ORIGORDDT              = VC
+  2  FUTUREORD              = VC
+  2  RAD_COMMENTS           = VC
+  2  RADIOLOGIST_PRIORITY   = VC
+  2  RADIOLOGISTID          = VC
+  2  RELINKFLAG             = VC
+  2  RELINKORDERID          = F8
+  2  RELINKORDERNOTE        = VC
+  2  NOPFORMID              = VC
+  2  ORDERCMTS              = VC
+  2  GROUP_PF_ID            = F8
+  2  PETORDER               = F8
+  2  SCH_EVTID              = F8
+  2  ARIND                  = I2
+ 
+1  ORDER_CNT                = I2
+1  ORDERS  [*]
+  2  ORDERID                = F8
+  2  PRIORITY               = VC
+  2  ACCESSIONID            = VC
+  2  ORGENCNTRID            = F8
+  2  ENCNTRID               = F8
+  2  PERSONID               = F8
+  2  MODTYPE                = F8
+  2  SUBTYPE_CD             = F8
+  2  CATALOG_CD             = F8
+  2  ORDER_DESC             = VC
+  2  NAME_FULL_FORMATTED    = VC
+  2  MRNTYPE                = VC
+  2  DOB                    = VC
+  2  AGE                    = VC
+  2  WEIGHT                 = VC
+  2  HEIGHT                 = VC
+  2  ORDER_LOC              = VC
+  2  NURSING_UNIT           = VC
+  2  ROOM                   = VC
+  2  BED                    = VC
+  2  ISOLATION              = VC
+  2  DATE_ORDERED           = VC
+  2  DATE_ORDERED_DQ8       = DQ8
+  2  DATE_REQUESTED         = VC
+  2  ORDER_STATUS           = VC
+  2  DEPT_STATUS            = VC
+  2  PROTOCAL_STATUS        = VC
+  2  PROTOCAL_STAT_LVL      = I4
+  2  CSA_SIGNED             = I4
+  2  CSA_SIGNED_DT          = VC
+  2  CSA_FORM_ACTIVITY_ID   = F8
+  2  CSA_EXAM_FORM_ID       = F8
+  2  CSA_CONTRIND           = I4
+  2  CSA_CTRIND_FORM_ID     = F8
+  2  CSA_CTRIND_FORM_ACT_ID = F8
+  2  ORDER_CLIN_DISP_LINE   = VC
+  2  ALERT_FLAG             = VC
+  2  MODIFY_FLAG            = VC
+  2  ANTICIPATED_DIS_DT     = VC
+  2  ANTICIPATED_DIS_TM     = VC
+  2  PROTOCOL_DATE_MODIFIED = VC
+  2  FORM_ACTIVITY_ID       = F8
+  2  EXAM_FORM_ID           = F8
+  2  RAD_COMMENTS           = VC
+  2  PID                    = F8
+  2  EPID                   = F8
+  2  RAD_DISCRETION         = VC
+  2  SEDATION               = VC
+  2  GROUP_PF_ID            = F8
+  2  ODDIAGNOSIS            = VC
+  2  ORDERCMTS              = VC
+ 
+1 ORDERLIST_CNT             = I4
+1 ORDERLIST [*]
+  2 ORDERID                 = F8
+  2 PERSONID                = F8
+  2 DATE_ORDERED            = VC
+  2 ORDER_DESC              = VC
+  2 PROTOCAL_STATUS         = VC
+  2 ORDER_CLIN_DISP_LINE    = VC
+1 ENCTRLIST_CNT             = I4
+1 ENCTRZEROORDERID          = F8
+1 ENCTR_EXAM_FORM_ID        = F8
+1 ENCTRLIST [*]
+  2 ENCTRID                 = F8
+  2 ENCNTR_TYPE             = VC
+  2 PERSONID                = F8
+1 ORDERSIDLST               = VC
+1 PROTSTAT                  = VC
+1 GROUP_PF_ID               = F8
+)
+ 
+RECORD  PFID  (
+1  PROGVER_CHLA             = VC
+1 LOG_ITEM_CNT              = I4
+1 LOG_ITEMS [*]
+  2   LOG_ITEM              = VC
+1  USERID                   = F8
+1  FNCRESP_CD               = F8
+1  FNCRESP_DETAIL           = VC
+1  FOSTATE                  = VC
+1  FNOPER                   = I2
+1 XCNT                   	= I2
+1 XORD [*]
+  2   ACTIVEIND             = I4
+  2   ITEMID                = I4
+  2   ITEMFOUND             = I2
+  2   EXCLUD_FLAG           = I4
+  2   XDAYS                 = I4
+  2   BLBEVTID             	= F8
+  2   ORDIDBLB             	= VC
+  2   XPETORDER             = F8
+  2   ORDERID               = F8
+  2   CATALOG_CD            = F8
+  2   ORDERID_DESC          = C200
+  2   RADORDID              = C30
+  2   CHGRADORDID           = F8
+  2   DISPLAYKEY            = C250
+  2   ORIGORDERID           = F8
+  2   MODTYPE               = F8
+  2   SUBTYPE_CD            = F8
+  2   CT_MOD_CD             = F8
+  2   PERSONID              = F8
+  2   SCH_EVENT_ID          = F8
+  2   PARENT_EVT_IDS        = I2
+  2   TABSECTION_ID         = F8
+  2   PF_CE_EVTID           = F8
+  2   EP_CE_EVTID           = F8
+  2   SCH_CE_EVTID          = F8
+  2   CMT_CE_EVTID          = F8
+  2   PFORMID               = F8
+  2   SCH_EVTID             = F8
+  2   EXAMFORMID            = F8
+  2   ORDSTATUS             = C30
+  2   ORDERPROVIDER         = F8
+  2   ORDERPROVIDERNAME     = C100
+  2   ENCTR_ID              = F8
+  2   ORIGENCTRID           = F8
+  2   XREQSTARTDTTM         = C30
+  2   XSTOPDTTM             = C30
+  2   XEXPIREDTTM           = C30
+  2   REQSTARTDTTM          = C30
+  2   STOPDTTM              = C30
+  2   EXPIREDTTM            = C30
+  2   PROTOCOLSTATUS        = C100
+  2   PROTOCOLSTATLVL       = I4
+  2   EP_PROTOCOLSTATUS     = C100
+  2   ORDERLOC              = C30
+  2   ORDERPRIORITY         = C30
+  2   ORDERDTTM             = DQ8
+  2   DATEORDER             = C30
+  2   ORDERDESC             = C200
+  2   MODIFYFLAG            = C30
+  2   PROTDATEMODIFIED      = C30
+  2   DEPTORDSTATUS         = C30
+  2   SEDATIONTYPE          = C30
+  2   RADDISCRETION         = C30
+  2   CLNDISPLINE           = C300
+  2   EPHOLDSTATUS          = C500
+  2   EPHOLDSTATUSID        = F8
+  2   EP2HOLDSTATUS         = C500
+  2   EP2HOLDSTATUSID       = F8
+  2   EPHOLDSTATNAME        = C100
+  2   EP2HOLDSTATNAME       = C100
+  2   EPHOLDSPECPROTOCOL    = C500
+  2   EPHOLDSPECPROTOCOLID  = F8
+  2   EPHOLDSPECPROTOCOLNM  = C100
+  2   EPMODIFYCMT           = C500
+  2   EPMODIFYCMTID         = F8
+  2   EPMODIFYCMTNAME       = C100
+  2   EPREORDERDAYS         = F8
+  2   EPREORDERFLAG         = C30
+  2   EPREORDERCHGS         = C500
+  2   NPHOLDSTATUS          = C500
+  2   NPHOLDSTATUSID        = F8
+  2   NPHOLDSTATNAME        = C100
+  2   NPHOLDCMT             = C500
+  2   NPHOLDCMTID           = F8
+  2   NP_CLR                = VC
+  2   NPCLRID               = F8
+  2   NPCLRNAME             = VC
+  2   NPHOLDCMTNAME         = C100
+  2   NPMODIFYCMT           = C500
+  2   NPMODIFYCMTID         = F8
+  2   NPMODIFYCMTNAME       = C100
+  2   RDCMTEVTID            = F8
+  2   RADCOMMENTS           = C2000
+  2   ODDIAGNOSIS           = C1000
+  2   PREGNANT              = C30
+  2   CLININFO              = C500
+  2   ORIGORDDT             = C30
+  2   FUTUREORD             = C30
+  2   ALERTFLAG             = C30
+  2   NAME_FULL_FMT         = C100
+  2   MRN                   = C30
+  2   DOB                   = C30
+  2   AGE                   = C30
+  2   WEIGHT                = C30
+  2   HEIGHT                = C30
+  2   NEEDDOCCOSIGN   		= I4
+  2   NEEDPHYSVALID 		= I4
+  2   RADIOLOGISTPRIORITY   = C30
+  2   RADIOLOGID            = F8
+  2   RADIOLOGISTNAME       = C100
+  2   RELINKFLAG            = VC
+  2   RELINKORDERID         = F8
+  2   RELINKORDERNOTE       = C300
+  2   TO_BE_RELINKED        = C30
+  2   NOPFORMID             = VC
+  2   ORDERCMTS             = C2000
+  2   GROUP_PFID            = F8
+  2   ARIND                 = I2
+  2   ORDSTATE_CD           = F8
+)
+RECORD CUSTORD (
+    1 RACTIVE_IND    = I2
+    1 RCATALOG_CD    = F8
+    1 RCT_MOD_CD     = F8
+    1 RDISPLAYKEY    = VC
+    1 RENCNTR_ID     = F8
+    1 REP_CE_EVT_ID  = F8
+    1 RGRP_PF_ID     = F8
+    1 RITEM1         = VC
+    1 RITEM1_CD      = F8
+    1 RITEM2         = VC
+    1 RITEM2_CD      = F8
+    1 RMOD_TYPE      = F8
+    1 RORDERSTATE    = VC
+    1 RORDERSTATE_CD = F8
+    1 RORDER_DT_TM   = DQ8
+    1 RORDER_ID      = F8
+    1 RORDER_ID_LINK = F8
+    1 RORDER_LOC     = VC
+    1 RORDER_MNEMONIC= VC
+    1 RPERSON_ID     = F8
+    1 RPFORM_ID      = F8
+    1 RPF_CE_EVT_ID  = F8
+    1 RSCH_EVTID     = F8   ;02.07.03
+    1 RSEQACTION     = VC
+    1 RSEQACTION_CD  = F8
+    1 RUPDT_DT_TM    = DQ8
+    1 RUPDT_BY_ID    = F8
+)
+RECORD ORDHIST (
+ 1 RACTION_STATE_CD = F8
+ 1  RFUNCOP_CD      = F8
+ 1  RORDERSTATE     = VC
+ 1  RORDER_ID       = F8
+ 1  RRECCLS_CD      = F8
+ 1  RSEQACTION      = VC
+ 1  RTBLREC         = VC
+ 1  RUPDT_CNT       = I4
+)
+ 
+SET RPTDATA-> ERR_STAT      = "FALSE"
+SET RPTDATA->USERID         = $USERID
+SET PFID->USERID            = $USERID
+SET RPTDATA->FNOPER         = $FUNCOPER
+SET RPTDATA->FOSTATE        = $FOSTATE
+SET PFID->FNOPER            = $FUNCOPER
+SET PFID->FOSTATE           = $FOSTATE
+SET DEBUG_REPLY_STRING      = "NU"
+SET DEBUG_CTL_FLAG          = 0
+SET RPTDATA->FNCRESP_CD  	= 0
+SET LAST_MOD                = "02.08.00"
+SET PFID -> PROGVER_CHLA    = CONCAT ("20190920 14:00 New Pilot PRODQA_Deployment)  ", LAST_MOD)
+SET RPTDATA -> PROGVER_CHLA = PFID -> PROGVER_CHLA
+ 
+IF ($FUNCOPER = 0 )
+    CALL SRORDCNL (NULL)
+    CALL SRLDFO (NULL)
+    CALL SRARLK (NULL)
+    IF ( PFID->XCNT > 0)
+        CALL SRLFODAT2 (NULL)
+        SELECT
+               XPFORM_TYPE      = PFID->XORD[D1.SEQ].MODTYPE
+               ,XID  = PFID->XORD[D1.SEQ].ITEMID
+        FROM
+               (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+        WHERE PFID-> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+        DETAIL
+             PFID-> XORD[XID]-> EXCLUD_FLAG =  2
+             ,IF (XPFORM_TYPE = 633748.0 )
+                PFID-> XORD[XID]->EXAMFORMID = IRPFREFID
+             ENDIF
+        WITH NOCOUNTER
+        CALL SRLDRETDAT  ( NULL)
+    ENDIF
+ENDIF
+IF ($FUNCOPER = 1 )
+    CALL SRORDCNL (NULL)
+    CALL SRLDFOLIM (NULL)
+    CALL SRARLK (NULL)
+    SET STAT = INITREC(PFID)
+    CALL SRLDLKORD (NULL)
+    IF ($FOSTATE = "HOLD")
+    	CALL SRLDLKORDAR3 (NULL)
+    ENDIF
+    IF ( PFID->XCNT > 0)
+        CALL SRPF_PROT (NULL)
+        CALL SRLFODAT (NULL)
+        IF ($FOSTATE = "HOLD")
+            SELECT INTO "nl:"
+                XORD_EXCLUD_FLAG   = PFID->XORD[D1.SEQ].EXCLUD_FLAG
+                ,XID       = PFID->XORD[D1.SEQ].ITEMID
+            FROM
+                (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+            PLAN D1
+            WHERE  PFID->XORD[D1.SEQ].EXCLUD_FLAG      = 0
+              AND  PFID->XORD[D1.SEQ].PROTOCOLSTATLVL  = 1
+              AND (PFID->XORD[D1.SEQ].EPHOLDSTATUS !="" OR PFID->XORD[D1.SEQ].EP2HOLDSTATUS !="" )
+            DETAIL
+              PFID->XORD[XID].EXCLUD_FLAG = 2
+            WITH NOCOUNTER, TIME = 32
+ 
+            SELECT INTO "nl:"
+                XORD_EXCLUD_FLAG   = PFID->XORD[D1.SEQ].EXCLUD_FLAG
+                ,XID       = PFID->XORD[D1.SEQ].ITEMID
+            FROM
+                (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+            PLAN D1
+            WHERE PFID->XORD[D1.SEQ].EXCLUD_FLAG 	 = 0
+ 
+              AND (PFID->XORD[D1.SEQ].PROTOCOLSTATLVL = 2 OR PFID->XORD[D1.SEQ].MODTYPE = 633751)
+              AND  PFID->XORD[D1.SEQ].NPHOLDSTATUS 	 !=""
+            DETAIL
+              PFID->XORD[XID].EXCLUD_FLAG = 2
+            WITH NOCOUNTER, TIME = 32
+ 
+      		SELECT INTO "nl:"
+                XID       = PFID->XORD[D1.SEQ].ITEMID
+            FROM
+                (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+            PLAN D1
+            WHERE PFID->XORD[D1.SEQ].ARIND  = 95
+ 
+            DETAIL
+              PFID->XORD[XID].EXCLUD_FLAG = 2
+            WITH NOCOUNTER, TIME = 32
+ 
+        ELSEIF ($FOSTATE = "MODIFY")
+            SELECT INTO "nl:"
+                XORD_EXCLUD_FLAG   = PFID->XORD[D1.SEQ].EXCLUD_FLAG
+                ,XID       = PFID->XORD[D1.SEQ].ITEMID
+            FROM
+                (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+            PLAN D1
+            WHERE PFID->XORD[D1.SEQ].EXCLUD_FLAG 	= 0
+              AND PFID->XORD[D1.SEQ].PROTOCOLSTATLVL < 4
+			  AND PFID->XORD[D1.SEQ].EPREORDERDAYS 	< 31
+              AND PFID->XORD[D1.SEQ].EPREORDERFLAG 	= "Yes"
+            DETAIL
+              PFID->XORD[XID].EXCLUD_FLAG = 2
+            WITH NOCOUNTER, TIME = 32
+        ELSEIF ($FOSTATE = "FUTURE")
+            SELECT INTO "nl:"
+                XORD_EXCLUD_FLAG   = PFID->XORD[D1.SEQ].EXCLUD_FLAG
+                ,XID       = PFID->XORD[D1.SEQ].ITEMID
+            FROM
+                (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+            PLAN D1
+            WHERE PFID->XORD[D1.SEQ].EXCLUD_FLAG 		 = 0
+              AND TRIM(PFID->XORD[D1.SEQ].PROTOCOLSTATUS) != "NEW"
+              AND PFID->XORD[D1.SEQ].PROTOCOLSTATLVL  	 < 3
+              AND PFID->XORD[D1.SEQ].EPHOLDSTATUS  		 =""
+              AND PFID->XORD[D1.SEQ].EP2HOLDSTATUS 		 =""
+      		  AND PFID->XORD[D1.SEQ].NPHOLDSTATUS        =""
+              AND TRIM(PFID->XORD[D1.SEQ].EPREORDERFLAG) != "Yes"
+            DETAIL
+              PFID->XORD[XID].EXCLUD_FLAG = 2
+            WITH NOCOUNTER, TIME = 33
+        ENDIF
+        CALL SRLDRETDAT  ( NULL)
+    ENDIF
+ENDIF
+IF ($FUNCOPER = 2 )
+  CALL SRLDFOSPC ( $SELORDID  )
+  IF (PFID ->XCNT > 0 )
+      CALL SRLDRCDAT (NULL)
+      CALL SRLDCTBL ( 1 )
+  ELSE
+      SET RPTDATA ->ERR_STAT = "TRUE"
+  ENDIF
+ 
+  IF (RPTDATA ->ERR_STAT != "FALSE" )
+      SET RPTDATA->FNCRESP_CD = 500
+      SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,
+                " ;ORDER ID: ", $SELORDID , " ERROR: Not Linked to PowerForm: ")
+  ELSE
+      SET RPTDATA->FNCRESP_CD = 200
+      SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,
+              " ;ORDER ID: ", $SELORDID , "ORDERDESC: ",PFID -> XORD[1] ->ORDERDESC
+              ," Linked to PowerForm: ", PFID -> XORD[1] -> PFORMID  )
+  ENDIF
+ENDIF
+IF ($FUNCOPER = 3 )
+    CALL SRORDCNL (NULL)
+    CALL SRLDFOLIM (NULL)
+    CALL SRARLK (NULL)
+    SET STAT = INITREC(PFID)
+    CALL SRLDACTORDS(NULL)
+    CALL SRLDAOCLNDAT(COUNTDOWN)
+ENDIF
+IF ($FUNCOPER = 4 )  ; TEST ROUTINE
+    CALL SRORDCNL (NULL)
+    CALL SRLDFOLIM (NULL)
+    CALL SRARLK (NULL)
+    SET STAT = INITREC(PFID)
+    CALL SRLDACTORDS(NULL)
+    CALL SRLDAOCLNDAT(COUNTDOWN)
+	SET _Memory_Reply_String = CNVTRECTOJSON(PFID)
+	SET DEBUG_CTL_FLAG = 1
+;  CALL SRLDFOSPC ( $SELORDID  )
+;  IF (PFID ->XCNT > 0 )
+;  	call echo (" CALL SRLDRCDAT")
+;      CALL SRLDRCDAT (NULL)
+;      ;CALL SRLDCTBL ( PFID ->XCNT )
+;	  ;set PFID->XORD[1].EXCLUD_FLAG = 2
+;      ;CALL SRLDRETDAT  ( NULL)
+; 	SET _Memory_Reply_String = CNVTRECTOJSON(PFID)
+; 	SET DEBUG_CTL_FLAG = 1
+;  ELSE
+;      SET RPTDATA ->ERR_STAT = "TRUE"
+;  ENDIF
+;
+;  IF (RPTDATA ->ERR_STAT != "FALSE" )
+;      SET RPTDATA->FNCRESP_CD = 500
+;      SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,
+;                " ;ORDER ID: ", $SELORDID , " ERROR: Not Linked to PowerForm: ")
+;  ELSE
+;      SET RPTDATA->FNCRESP_CD = 200
+;      SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,
+;              " ;ORDER ID: ", $SELORDID , "ORDERDESC: ",PFID -> XORD[1] ->ORDERDESC
+;              ," Linked to PowerForm: ", PFID -> XORD[1] -> PFORMID  )
+;  ENDIF
+ 
+;	CALL SRLDFOLIM (NULL)
+;	SET _Memory_Reply_String = CNVTRECTOJSON(PFID)
+;	SET DEBUG_CTL_FLAG = 1
+;    SET SELORDERID = $ORDERID
+;    CALL SRLDFOSPC ( $ORDERID  )
+;    SET RPTDATA ->ERR_STAT = "TRUE"
+;    IF ( $ENCTRID >0 )
+;        IF ( PFID->XCNT = 1)
+;            SET PFID->XORD[1]->ORIGENCTRID = $ENCTRID
+;            SET PFID->XORD[1]->ENCTR_ID = $ENCTRID
+;            CALL SRLDRCDAT (NULL)
+;      			IF (PFID->XORD[1]->PFORMID > 0 )
+;                SET RPTDATA ->ERR_STAT = "FALSE"
+;                CALL SRLDCTBL ( PFID ->XCNT )
+;                SET PFID->XORD[1]->EXCLUD_FLAG = 2
+;                CALL SRLDRETDAT (NULL)
+;          	ENDIF
+;        ENDIF
+;    ENDIF
+;
+;    IF (RPTDATA ->ERR_STAT != "FALSE" )
+;        SET RPTDATA->FNCRESP_CD = 500
+;        SET RPTDATA->FNCRESP_DETAIL = BUILD("ORDER ID: ", $SELORDID , " ERROR: Modified Order Not relinked to PowerForm: ")
+;    ELSE
+;        SET RPTDATA->FNCRESP_CD = 200
+;        SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,
+;                 " ;ORDER ID: ", $SELORDID , "ORDERDESC: ",PFID -> XORD[1] ->ORDERDESC
+;                    ," Linked to PowerForm: ", PFID -> XORD[1] -> PFORMID  )
+;    ENDIF
+ENDIF
+IF ($FUNCOPER = 5 )
+     CALL SRORDCNL ( NULL)
+     CALL SRLDFOLIM (NULL)
+     CALL SRARLK (NULL)
+    SET RPTDATA->FNCRESP_CD = 200
+    SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL, " ;FUNCOPER = 5 COMPLETED" )
+ENDIF
+IF ($FUNCOPER = 6 )
+    SET RPTDATA -> ENCTRZEROORDERID = $ORDERID
+    SET RPTDATA -> ENCTR_EXAM_FORM_ID= $PFORMID
+ 
+    SELECT INTO "nl:"
+    FROM
+        ENCOUNTER   E
+        WHERE E.PERSON_ID = $PERSONID
+        AND E.ENCNTR_TYPE_CD > 0
+        ORDER BY E.REG_DT_TM DESC
+        DETAIL
+           RPTDATA -> ENCTRLIST_CNT = RPTDATA -> ENCTRLIST_CNT  + 1
+           ,STAT = ALTERLIST ( RPTDATA -> ENCTRLIST ,  RPTDATA -> ENCTRLIST_CNT )
+           ,RPTDATA -> ENCTRLIST[RPTDATA -> ENCTRLIST_CNT]-> ENCTRID     = E.ENCNTR_ID
+           ,RPTDATA -> ENCTRLIST[RPTDATA -> ENCTRLIST_CNT]-> ENCNTR_TYPE =  UAR_GET_CODE_DISPLAY(E.ENCNTR_TYPE_CD)
+           ,RPTDATA -> ENCTRLIST[RPTDATA -> ENCTRLIST_CNT]-> PERSONID    = E.PERSON_ID
+    WITH NOCOUNTER, SEPARATOR=" ", FORMAT , MAXREC= 15
+ENDIF
+IF ($FUNCOPER = 9 )
+	CALL SRMDCT ( NULL )
+	SET RPTDATA->FNCRESP_CD = 200
+	SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL, " ;FUNCOPER = 9 COMPLETED" )
+ENDIF
+IF ($FUNCOPER = 12 )
+    SET  MPCNT = CNVTINT($PFORMID)
+    SET  MPORDBID = CNVTREAL( PIECE($ARRORDERS, ",", 1, "0.0" ,3))
+	SET  CUSTORD->RPFORM_ID = 0
+  	SELECT INTO "NL:"
+  	FROM
+       CUST_OPRDWL_ORD   C
+       WHERE C.order_id 	= MPORDBID
+         AND C.ACTIVE_IND 	= 1
+  	DETAIL
+		CUSTORD->RENCNTR_ID      = C.ENCNTR_ID
+		,CUSTORD->RORDER_ID      = C.ORDER_ID
+		,CUSTORD->RACTIVE_IND    = 1
+		,CUSTORD->RPF_CE_EVT_ID  = C.PF_CE_EVT_ID
+		,CUSTORD->REP_CE_EVT_ID  = C.EP_CE_EVT_ID
+		,CUSTORD->RPFORM_ID      = C.PFORM_ID
+		,CUSTORD->RGRP_PF_ID     = C.PFORM_ID
+	WITH NOCOUNTER
+    IF (CUSTORD->RPFORM_ID > 0)
+		FOR ( MPORDIDX = 1 TO MPCNT )
+			SET CUSTORD->RORDER_ID  = CNVTREAL( PIECE($ARRORDERS, ",", MPORDIDX, "0.0" ,3))
+			SELECT INTO "nl:"
+			FROM
+				CUST_OPRDWL_ORD C
+			WHERE C.ORDER_ID = CUSTORD->RORDER_ID
+			  AND C.ACTIVE_IND = 1
+			WITH NOCOUNTER
+			IF (CURQUAL = 0 )
+				CALL SRLDFOSPC ( CUSTORD->RORDER_ID  )
+				IF (PFID->XCNT = 1 )
+					CALL SRLDRCDAT (NULL)
+					CALL SRLDCTBL ( 1 )
+				ENDIF
+				SET STAT = INITREC(PFID)
+			ENDIF
+			CALL  SRUPTCTBL ( 1 )
+		ENDFOR
+    ELSE
+		SET RPTDATA ->ERR_STAT = "TRUE"
+    ENDIF
+ 
+    IF (RPTDATA ->ERR_STAT != "FALSE" )
+        SET RPTDATA->FNCRESP_CD = 500
+        SET RPTDATA->FNCRESP_DETAIL = BUILD("MP ORDER ID: ", $ARRORDERS , " ERROR: UPDATE For MP Linkage ")
+    ELSE
+        SET RPTDATA->FNCRESP_CD = 200
+        SET RPTDATA->FNCRESP_DETAIL = BUILD("MP GRP_PF_ID: ", CUSTORD->RGRP_PF_ID  ,
+                " SUCCESSFULL: UPDATE For MP Linkage CNT ",MPCNT, ": ",$ARRORDERS, ": "
+                ,CUSTORD->RENCNTR_ID, ": ",CUSTORD->RGRP_PF_ID)
+    ENDIF
+ENDIF
+IF ($FUNCOPER = 13 )
+	SET  MPCNT = CNVTINT($PFORMID)
+	SET  MPORDBID = CNVTREAL( PIECE($ARRORDERS, ",", 1, "0.0" ,3))
+ 
+	SELECT INTO "NL:"
+	FROM
+		CUST_OPRDWL_ORD   C
+	WHERE C.ORDER_ID = MPORDBID
+	  AND C.ACTIVE_IND = 1
+	DETAIL
+		 CUSTORD->RENCNTR_ID     = C.ENCNTR_ID
+		,CUSTORD->RORDER_ID      = C.ORDER_ID
+		,CUSTORD->RACTIVE_IND    = 1
+		,CUSTORD->RPF_CE_EVT_ID  = C.PF_CE_EVT_ID
+		,CUSTORD->REP_CE_EVT_ID  = C.EP_CE_EVT_ID
+		,CUSTORD->RGRP_PF_ID     = C.GRP_PF_ID
+		,CUSTORD->RSCH_EVTID     = C.SCH_CE_EVT_ID
+	WITH NOCOUNTER
+	IF (CUSTORD->RGRP_PF_ID  > 0)
+		CALL ECHO("RGRP_PF_ID > 0")
+		CALL  SRUPTCTBL ( 2 )
+		IF (RPTDATA ->ERR_STAT = "FALSE" )
+;			CALL ECHO("RPTDATA ->ERR_STAT = FALSE")
+			SET CUSTORD->RACTIVE_IND = 13
+			FOR ( MPORDIDX = 1 TO MPCNT )
+				SET CUSTORD->RORDER_ID  = CNVTREAL( PIECE($ARRORDERS, ",", MPORDIDX, "0.0" ,3))
+				SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,": CUSTORD->RORDER_ID:",
+											CUSTORD->RORDER_ID, " CUSTORD->RACTIVE_IND:",CUSTORD->RACTIVE_IND)
+				CALL  SRUPTCTBL ( 3 )
+			ENDFOR
+ 
+			UPDATE INTO CUST_OPRDWL_ORD C
+				SET C.ACTIVE_IND = 0
+			WHERE C.SCH_CE_EVT_ID = CUSTORD->RSCH_EVTID
+				AND C.ACTIVE_IND = 13
+			COMMIT
+		ENDIF
+	ELSE
+		SET RPTDATA ->ERR_STAT = "TRUE"
+	ENDIF
+ 
+	IF (RPTDATA ->ERR_STAT != "FALSE" )
+		SET RPTDATA->FNCRESP_CD = 500
+		SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,": MP ORDER ID: ", $ARRORDERS ,
+											 " ERROR: EDIT update for MP Linkage ")
+	ELSE
+		SET RPTDATA->FNCRESP_CD = 200
+		SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL,": MP GRP_PF_ID: ", CUSTORD->RGRP_PF_ID  ,
+			" SUCCESSFULL: EDIT update for MP Linkage CNT ",MPCNT, ": ",$ARRORDERS, ": ",
+			CUSTORD->RENCNTR_ID, ": ",CUSTORD->RGRP_PF_ID)
+	ENDIF
+;	CALL ECHO(BUILD ("RPTDATA->FNCRESP_DETAIL",RPTDATA->FNCRESP_DETAIL))
+ENDIF
+IF ($FUNCOPER = 99 )
+	SET RPTDATA->FNCRESP_DETAIL = BUILD("FUNCOPER 99: ", "OPERATION COMPLETED")
+ENDIF
+;==================================================================================
+SUBROUTINE   SRMDCT ( NULL )
+ 
+DECLARE ITEM_LOG      = VC
+DECLARE MDCT_FLAG     = F8
+DECLARE NPHOLD_FLAG   = F8
+DECLARE MDCTNP_FLAG   = F8
+DECLARE CURDTTM       = VC
+DECLARE ENCNTR_ID     = F8
+DECLARE ACT_IND       = I4
+DECLARE PF_GRPID      = F8
+DECLARE SCH_EVT_ID    = F8
+DECLARE PF_CE_EVTID   = F8
+DECLARE EP_CE_EVTID   = F8
+DECLARE MDCT_ORDERID  = F8
+DECLARE UPD_DTTM      = DQ8
+DECLARE ORDER_CNT       = I2
+DECLARE PROT_STAT       = VC
+ 
+    CALL ECHO("SRMDCT")
+	SET MDCT_ORDERID = $SELORDID
+	SELECT  INTO "nl:"
+	FROM
+	   CUST_OPRDWL_ORD   C
+ 
+	  WHERE C.ACTIVE_IND = 1
+		AND C.ORDER_ID = MDCT_ORDERID
+	DETAIL
+	  EP_CE_EVTID   = C.EP_CE_EVT_ID
+	  , PF_GRPID    = C.GRP_PF_ID
+	  , ACT_IND     = C.ACTIVE_IND
+	  , PF_CE_EVTID = C.PF_CE_EVT_ID
+	WITH NOCOUNTER, TIME = 14
+	IF (EP_CE_EVTID = 0 )
+		SELECT INTO "nl:"
+		FROM
+			CLINICAL_EVENT   CE
+			WHERE CE.ENCNTR_ID = PFID -> XORD[1] -> ORIGENCTRID
+              AND CE.PARENT_EVENT_ID    = PF_CE_EVTID
+			  AND CE.EVENT_CD = 11895.00
+			  AND (CE.VALID_UNTIL_DT_TM = CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+		 DETAIL
+			 IF (CE.EVENT_TITLE_TEXT = "Exam Protocol - Outpatient")
+				 EP_CE_EVTID = CE.EVENT_ID
+			 ENDIF
+		 WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME = 60
+ 
+		 IF (CURQUAL > 0)
+            IF (PF_GRPID = 0)
+                UPDATE  INTO CUST_OPRDWL_ORD   C
+                    SET C.EP_CE_EVT_ID = EP_CE_EVTID
+                WHERE C.ORDER_ID   = MDCT_ORDERID
+                AND C.ACTIVE_IND   = ACT_IND
+                WITH NOCOUNTER
+                COMMIT
+            ELSE
+               UPDATE  INTO CUST_OPRDWL_ORD   C
+                    SET C.EP_CE_EVT_ID = EP_CE_EVTID
+                WHERE C.GRP_PF_ID    = PF_GRPID
+                AND C.ACTIVE_IND   = ACT_IND
+                WITH NOCOUNTER
+                COMMIT
+            ENDIF
+		 ENDIF
+	ENDIF
+ 
+	SET ORDER_CNT = 1
+	SET MDCT_FLAG 	 = 0
+	SET MDCTNP_FLAG	 = 0
+	SELECT  INTO "nl:"
+	FROM
+		CLINICAL_EVENT   CE
+		, CUST_OPRDWL_ORD   C
+	PLAN C
+		WHERE C.ACTIVE_IND = 1
+		  AND C.ORDER_ID   = MDCT_ORDERID
+		  AND C.ORDERSTATE = "FUTURE"
+	JOIN CE
+		WHERE CE.PARENT_EVENT_ID = C.EP_CE_EVT_ID
+		AND CE.VALID_UNTIL_DT_TM = CNVTDATETIME("31-DEC-2100 00:00:00")
+		AND CE.UPDT_DT_TM >  C.UPDT_DT_TM
+		AND CE.EVENT_CD IN (
+			  204661712.00
+			, 204661795.00
+		)
+		AND CE.PUBLISH_FLAG = 1
+		AND CE.RESULT_STATUS_CD IN (ATHRSLTSTCD, ALTRSLSTCD, MODRSLSTCD); (35,25,34)
+		AND CE.EVENT_TAG!="Date\Time Correction"
+	DETAIL
+		IF ( CE.EVENT_CD = 204661712.00 )
+			IF (CE.RESULT_VAL   = "Yes, with modified contrast change")
+				UPD_DTTM  	= CE.UPDT_DT_TM
+				PF_GRPID    = C.GRP_PF_ID
+				CURDTTM     = FORMAT(CE.UPDT_DT_TM,"DD-MMM-YYYY HH:MM:SS;;D")
+				MDCT_FLAG   = 1
+			ELSEIF (CE.RESULT_VAL   = "Yes, with no changes")
+				MDCT_FLAG   = 2
+				PF_GRPID    = C.GRP_PF_ID
+			ENDIF
+		ELSE
+			IF (CE.RESULT_VAL = "Yes")
+				MDCTNP_FLAG = 1
+				PF_GRPID    = C.GRP_PF_ID
+			ENDIF
+		ENDIF
+	WITH orahintcbo("index(CE  XIE1CLINICAL_EVENT)"), NOCOUNTER, TIME = 49
+    IF ($FUNCOPER = 9)
+		SET PROT_STAT = $LNKPAIR
+		SET RPTDATA->ORDERSIDLST = CNVTSTRING( MDCT_ORDERID , 17, 0)
+		SET RPTDATA->GROUP_PF_ID = PF_GRPID
+		SET RPTDATA->PROTSTAT = "NOCHANGE"
+		IF (MDCT_FLAG > 0 AND PROT_STAT = "EP")
+			SET RPTDATA->PROTSTAT = "COMPLETE"
+ 
+		ELSEIF (MDCTNP_FLAG = 1 AND PROT_STAT = "NP")
+			SET RPTDATA->PROTSTAT = "COMPLETE"
+		ENDIF
+	ENDIF
+	IF (MDCT_FLAG = 1 AND MDCTNP_FLAG = 0)
+		SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL, " ;FOUND CT_MOD ;" )
+		 UPDATE  INTO CUST_OPRDWL_ORD   C
+			 SET C.SEQACTION_CD = 105
+			 , C.UPDT_DT_TM    = CNVTDATETIME(CURDTTM)
+ 
+		 WHERE C.ORDER_ID   	 =  MDCT_ORDERID
+		   AND C.ACTIVE_IND   = 1
+		   AND C.SEQACTION_CD = 0
+		 WITH NOCOUNTER
+		 COMMIT
+		SET ITEM_LOG = BUILD("PF CT MOD CHG: " , CNVTSTRING(MDCT_ORDERID, 17, 2)  )
+ 
+		 IF (PF_GRPID > 0)
+			  UPDATE  INTO CUST_OPRDWL_ORD   C
+				  SET C.SEQACTION_CD = 105
+				 , C.UPDT_DT_TM    = CNVTDATETIME(CURDTTM)
+ 
+			  WHERE C.GRP_PF_ID 	  = PF_GRPID
+			    AND C.ACTIVE_IND   = 1
+			    AND C.SEQACTION_CD = 0
+			  WITH NOCOUNTER
+			  COMMIT
+			  SET ITEM_LOG = BUILD(ITEM_LOG," - MP GROUP  " ,CNVTSTRING(PF_GRPID, 17, 2))
+		 ENDIF
+ 
+		INSERT INTO CUST_OPRDWL_HIST C
+			SET C.ACTIVE_IND   = 1,
+				C.ACTION_STATE_CD  = 502,
+				C.FUNCOP_CD        = $FUNCOPER,
+				C.ORDERSTATE       = "FUTURE",
+				C.ORDER_ID         = MDCT_ORDERID,
+				C.RECCLS_CD        = 502,
+				C.SEQACTION        = "UPDATE",
+				C.TBLREC           = ITEM_LOG,
+				C.UPDT_CNT         = 0,
+				C.UPDT_DT_TM       = CNVTDATETIME(CURDATE,CURTIME3),
+				C.UPDT_BY_ID       = $USERID
+		WITH NOCOUNTER
+		COMMIT
+	ENDIF
+ 
+	SET NPHOLD_FLAG = 0
+	SET PF_GRPID = 0
+	SELECT INTO "nl:"
+	FROM
+		CLINICAL_EVENT   CE
+		, CUST_OPRDWL_ORD   C
+		, DUMMYT D
+ 
+	PLAN C
+		WHERE C.ACTIVE_IND = 1
+		  AND C.ORDER_ID   = MDCT_ORDERID
+		  AND C.ORDERSTATE = "ACTIVE"
+ 
+	JOIN CE
+		WHERE CE.PARENT_EVENT_ID =  C.EP_CE_EVT_ID
+		AND CE.EVENT_CD = 1549051097.00
+		AND CE.VALID_UNTIL_DT_TM = CNVTDATETIME("31-DEC-2100 00:00:00")
+		AND CE.PUBLISH_FLAG = 1
+		AND CE.RESULT_STATUS_CD IN (35,25,34)
+		AND CE.EVENT_TAG!="Date\Time Correction"
+	JOIN D
+		WHERE CE.EVENT_END_DT_TM  > CNVTLOOKBEHIND("3,H", C.updt_dt_tm )
+	ORDER
+		CE.PARENT_EVENT_ID
+		,CE.EVENT_CD
+ 
+ 	DETAIL
+ 		NPHOLD_FLAG  = 1
+ 		,PF_GRPID    = C.GRP_PF_ID
+ 		,CURDTTM     = FORMAT(CE.UPDT_DT_TM,"DD-MMM-YYYY HH:MM:SS;;D")
+ 
+	WITH NOCOUNTER
+ 
+	IF (NPHOLD_FLAG = 1)
+		 UPDATE  INTO CUST_OPRDWL_ORD   C
+			 SET C.SEQACTION_CD = 300
+			 , C.UPDT_DT_TM    = CNVTDATETIME(CURDTTM)
+ 
+		 WHERE C.ORDER_ID     =  MDCT_ORDERID
+		   AND C.ACTIVE_IND   = 1
+		 WITH NOCOUNTER
+		 COMMIT
+		SET ITEM_LOG = BUILD("NP DAY OF HOLD: " , CNVTSTRING(MDCT_ORDERID, 17, 2)  )
+ 
+		 IF (PF_GRPID > 0)
+			 UPDATE  INTO CUST_OPRDWL_ORD   C
+				 SET C.SEQACTION_CD = 300
+				 , C.UPDT_DT_TM    = CNVTDATETIME(CURDTTM)
+ 
+			 WHERE C.GRP_PF_ID    = PF_GRPID
+			   AND C.ORDERSTATE   = "ACTIVE"
+			   AND C.ACTIVE_IND   = 1
+			 WITH NOCOUNTER
+			 COMMIT
+			  SET ITEM_LOG = BUILD(ITEM_LOG," - MP GROUP  " ,CNVTSTRING(PF_GRPID, 17, 2))
+		 ENDIF
+ 
+		INSERT INTO CUST_OPRDWL_HIST C
+			SET C.ACTIVE_IND   = 1,
+				C.ACTION_STATE_CD  = 503,
+				C.FUNCOP_CD        = $FUNCOPER,
+				C.ORDERSTATE       = "ACTIVE",
+				C.ORDER_ID         = MDCT_ORDERID,
+				C.RECCLS_CD        = 503,
+				C.SEQACTION        = "UPDATE",
+				C.TBLREC           = ITEM_LOG,
+				C.UPDT_CNT         = 0,
+				C.UPDT_DT_TM       = CNVTDATETIME(CURDATE,CURTIME3),
+				C.UPDT_BY_ID       = $USERID
+		WITH NOCOUNTER
+		COMMIT
+	ENDIF
+END ;SUBROUTINE
+;==================================================================================
+SUBROUTINE   SRARLK ( NULL )
+ 
+DECLARE RLLPIDX = I4
+DECLARE LOCIDX  = I4
+DECLARE POSIDX  = I4
+DECLARE PFIDIDX = I4
+DECLARE CURDTTM = VC
+RECORD  LPFID  (
+  1 XCNT   = I2
+  1 XORD [*]
+	  2   SCH_EVTID   = F8
+	  2   CTMODCD     = F8
+	  2   GROUP_PFID  = F8
+	  2   SORDERID    = F8
+	  2   TORDERID    = F8
+	  2   PTRIDX      = I4
+	  2   ORDERDTTM   = VC
+	  2   UPDTTM      = VC
+	  2   PINDX       = I4
+	  2   LSEQACTION  = C10
+)
+RECORD WKA (
+  1 RTESTCURDTTM  = DQ8
+  1 ICNT  = I4
+  1 ITEMS_LOG  = VC
+  1 ITMS  [*]
+	  2 RACTIVE_IND   = I4
+	  2 RUPDT_FLAG    = I4
+	  2 REXCLUD_FLAG  = I4
+	  2 RORDER_ID     = F8
+	  2 RCT_MOD_CD    = F8
+	  2 RGROUP_PFID   = F8
+	  2 RSEQACT_CD    = F8
+	  2 RDAYS         = F8
+	  2 RENCOUNTERID  = F8
+	  2 RPERSONID     = F8
+	  2 REVENT_ID     = F8
+	  2 RCATALOG_CD   = F8
+	  2 RDISPLAYKEY   = VC
+	  2 RORDER_DESC   = VC
+	  2 RORDER_STAT   = VC
+	  2 RUPDT_DT_TM   = VC
+	  2 RRELKORDID    = F8
+	  2 RSCH_EVT_ID   = F8
+	  2 RTORDER_ID    = F8
+	  2 RRELKORDCAT_CD= F8
+	  2 RRELKORDDESC  = VC
+	  2 RRELKORDKEY   = VC
+	  2 RRLINKPAIR    = VC
+	  2 RSEQACTION    = C10
+)
+RECORD WKRC (
+  1 ICNT = I4
+  1 ITMS [*]
+	  2 XACTIVE_IND    = I4
+	  2 XCATALOG_CD    = F8
+	  2 XCT_MOD_CD     = F8
+	  2 XDISPLAYKEY    = C250
+	  2 XENCNTR_ID     = F8
+	  2 XEP_CE_EVT_ID  = F8
+	  2 XGRP_PF_ID     = F8
+	  2 XITEM1         = C500
+	  2 XITEM1_CD      = F8
+	  2 XITEM2         = C100
+	  2 XITEM2_CD      = F8
+	  2 XMOD_TYPE      = F8
+	  2 XORDERSTATE     = C10
+	  2 XORDERSTATE_CD = F8
+	  2 XORDER_DT      = C10
+	  2 XORDER_TM      = C6
+	  2 XORDER_DTTM    = VC
+	  2 XORDER_ID      = F8
+	  2 XORDER_ID_LINK = F8
+	  2 XGROUP_PFID    = F8
+	  2 XSORDER_ID     = VC
+	  2 XSORDER_ID_LINK= VC
+	  2 XORDER_LOC     = C100
+	  2 XORDER_MNEMONIC= C100
+	  2 XPERSON_ID     = F8
+	  2 XPFORM_ID      = F8
+	  2 XPF_CE_EVT_ID  = F8
+	  2 XSCH_EVT_ID    = F8
+	  2 XRELNOTE       = VC
+	  2 XSEQACTION     = C10
+	  2 XSEQACTION_CD  = F8
+	  2 XUPDT_DT_TM    = DQ8
+	  2 XUPDT_BY_ID    = F8
+)
+ 
+	SET CURDTTM = FORMAT(CNVTDATETIME(CURDATE,CURTIME3),"DD-MMM-YYYY HH:MM:SS;;D")
+	SET WKA->RTESTCURDTTM = CNVTDATETIME(CURDTTM)
+ 
+	SELECT INTO "NL:"
+	FROM
+		CUST_OPRDWL_ORD   C
+	WHERE   C.SEQACTION_CD  IN (105,200,300)
+	    AND C.UPDT_DT_TM > CNVTLOOKBEHIND("1,D")
+ 
+	DETAIL
+		WKA->ICNT = WKA->ICNT + 1
+		,STAT = ALTERLIST(WKA->ITMS,WKA->ICNT)
+		, WKA->ITMS[WKA->ICNT].RACTIVE_IND    = C.ACTIVE_IND
+		, WKA->ITMS[WKA->ICNT].RORDER_ID      = C.ORDER_ID
+		, WKA->ITMS[WKA->ICNT].RCATALOG_CD    = C.CATALOG_CD
+		, WKA->ITMS[WKA->ICNT].RORDER_DESC    = C.ORDER_MNEMONIC
+		, WKA->ITMS[WKA->ICNT].RDISPLAYKEY    = C.DISPLAYKEY
+		, WKA->ITMS[WKA->ICNT].RSCH_EVT_ID    = C.SCH_CE_EVT_ID
+		, WKA->ITMS[WKA->ICNT].RENCOUNTERID   = C.ENCNTR_ID
+		, WKA->ITMS[WKA->ICNT].RPERSONID      = C.PERSON_ID
+		, WKA->ITMS[WKA->ICNT].RCT_MOD_CD     = C.CT_MOD_CD
+		, WKA->ITMS[WKA->ICNT].RGROUP_PFID    = C.GRP_PF_ID
+		, WKA->ITMS[WKA->ICNT].RSEQACT_CD     = C.SEQACTION_CD
+		, WKA->ITMS[WKA->ICNT].RUPDT_DT_TM    = FORMAT(C.UPDT_DT_TM,"DD-MMM-YYYY HH:MM:SS;;Q")
+		, WKA->ITMS[WKA->ICNT].RDAYS          = DATETIMEDIFF(CNVTDATETIME(CURDATE, CURTIME3),C.UPDT_DT_TM)
+	WITH NOCOUNTER
+ 
+	IF (WKA->ICNT > 0 )
+		SELECT
+			ITEM_INDX = D.SEQ
+		FROM
+			(DUMMYT D WITH SEQ = VALUE(SIZE(WKA->ITMS, 5)))
+		WHERE  WKA->ITMS[D.SEQ].RSEQACT_CD = 105
+		   AND WKA->ITMS[D.SEQ].RDAYS > 15
+		DETAIL
+			WKA->ITMS[ITEM_INDX]->REXCLUD_FLAG = 10
+		WITH NOCOUNTER, TIME = 10
+ 
+		SELECT
+			ITEM_INDX = D.SEQ
+		FROM
+			(DUMMYT D WITH SEQ = VALUE(SIZE(WKA->ITMS, 5)))
+		WHERE  WKA->ITMS[D.SEQ].RSEQACT_CD = 200
+		   AND WKA->ITMS[D.SEQ].RDAYS > 15
+		DETAIL
+			WKA->ITMS[ITEM_INDX]->REXCLUD_FLAG = 10
+		WITH NOCOUNTER, TIME = 10
+ 
+		SELECT
+			ITEM_INDX = D.SEQ
+		FROM
+			(DUMMYT D WITH SEQ = VALUE(SIZE(WKA->ITMS, 5)))
+		WHERE  WKA->ITMS[D.SEQ].RSEQACT_CD = 300
+		   AND WKA->ITMS[D.SEQ].RDAYS > 15
+		DETAIL
+			WKA->ITMS[ITEM_INDX]->REXCLUD_FLAG = 10
+		WITH NOCOUNTER, TIME = 10
+ 
+		UPDATE INTO CUST_OPRDWL_ORD C
+			,(DUMMYT D WITH SEQ = VALUE(SIZE(WKA->ITMS, 5)))
+			SET C.ACTIVE_IND = 9,
+			    C.ORDERSTATE = 'CANCEL44',
+			    C.SEQACTION  = 'CANCEL44'
+		PLAN D
+			WHERE WKA->ITMS[D.SEQ].REXCLUD_FLAG = 10
+		JOIN C
+			WHERE C.ORDER_ID   = WKA->ITMS[D.SEQ].RORDER_ID
+			AND   C.ACTIVE_IND = WKA->ITMS[D.SEQ].RACTIVE_IND
+		WITH NOCOUNTER
+		COMMIT
+	ENDIF
+ 
+	IF (PFID->XCNT > 0 )
+ 
+		SELECT INTO "nl:"
+		FROM
+			CUST_OPRDWL_ORD C
+			, (DUMMYT D WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+		PLAN C
+			WHERE C.SEQACTION_CD IN (105)
+			  AND C.ACTIVE_IND IN ( 1, 97,99)
+			  AND C.UPDT_DT_TM > CNVTLOOKBEHIND("15,D")
+		JOIN D
+			WHERE PFID->XORD[D.SEQ].PERSONID    = C.PERSON_ID
+ 			  AND PFID->XORD[D.SEQ].ORDERID    != C.ORDER_ID
+ 			  AND PFID->XORD[D.SEQ].SCH_EVTID   = C.SCH_CE_EVT_ID
+			  AND PFID->XORD[D.SEQ].EXCLUD_FLAG = 0
+			  AND PFID->XORD[D.SEQ].CT_MOD_CD   = C.CT_MOD_CD
+			  AND PFID->XORD[D.SEQ].CATALOG_CD != C.CATALOG_CD
+		ORDER
+			PFID->XORD[D.SEQ].SCH_EVTID
+			,  PFID->XORD[D.SEQ].ORDERDTTM DESC
+		DETAIL
+			LPFID->XCNT = LPFID->XCNT + 1
+			, STAT = ALTERLIST(LPFID->XORD,LPFID->XCNT)
+			, LPFID->XORD[LPFID->XCNT].SCH_EVTID  = PFID->XORD[D.SEQ].SCH_EVTID
+			, LPFID->XORD[LPFID->XCNT].CTMODCD    = PFID->XORD[D.SEQ].CT_MOD_CD
+			, LPFID->XORD[LPFID->XCNT].SORDERID   = C.ORDER_ID
+			, LPFID->XORD[LPFID->XCNT].GROUP_PFID = C.GRP_PF_ID
+			, LPFID->XORD[LPFID->XCNT].ORDERDTTM  = FORMAT(C.ORDER_DT_TM,"mm/dd/yyyy HH:MM;;Q")
+			, LPFID->XORD[LPFID->XCNT].UPDTTM     = FORMAT(C.UPDT_DT_TM, "mm/dd/yyyy HH:MM;;Q")
+			, LPFID->XORD[LPFID->XCNT].TORDERID   = PFID->XORD[D.SEQ].ORDERID
+			, LPFID->XORD[LPFID->XCNT].PTRIDX     = PFID->XORD[D.SEQ].ITEMID
+			, LPFID->XORD[LPFID->XCNT].PINDX      = LPFID->XCNT
+			, LPFID->XORD[LPFID->XCNT].LSEQACTION = "RELINK"
+		WITH NOCOUNTER
+ 
+		SELECT  INTO "nl:"
+		FROM
+			CUST_OPRDWL_ORD C
+			, (DUMMYT D WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+		PLAN C
+			WHERE C.SEQACTION_CD IN (200,300)
+			  AND C.ACTIVE_IND IN ( 1,98,95,99)
+			  AND C.UPDT_DT_TM > CNVTLOOKBEHIND("15,D")
+		JOIN D
+			WHERE PFID->XORD[D.seq].PERSONID    = C.PERSON_ID
+			  AND PFID->XORD[D.SEQ].ORDERID    != C.ORDER_ID
+			  AND PFID->XORD[D.SEQ].SCH_EVTID   = C.SCH_CE_EVT_ID
+			  AND PFID->XORD[D.SEQ].EXCLUD_FLAG = 0
+			  AND PFID->XORD[D.seq].CT_MOD_CD   = C.CT_MOD_CD
+			  AND PFID->XORD[D.seq].CATALOG_CD  = C.CATALOG_CD
+		ORDER
+			PFID->XORD[D.SEQ].SCH_EVENT_ID
+			,  PFID->XORD[D.seq].ORDERDTTM DESC
+		DETAIL
+			LPFID->XCNT = LPFID->XCNT + 1
+			, STAT = ALTERLIST(LPFID->XORD,LPFID->XCNT)
+			, LPFID->XORD[LPFID->XCNT].SCH_EVTID  = PFID->XORD[D.SEQ].SCH_EVTID
+			, LPFID->XORD[LPFID->XCNT].CTMODCD    = PFID->XORD[D.seq].CT_MOD_CD
+;			, LPFID->XORD[LPFID->XCNT].XORDERSTATE= PFID->XORD[D.seq].ORDSTATUS  ;RM HARDCODE FUTURE VALUE
+			, LPFID->XORD[LPFID->XCNT].SORDERID   = C.ORDER_ID
+			, LPFID->XORD[LPFID->XCNT].ORDERDTTM  = FORMAT(C.ORDER_DT_TM,"mm/dd/yyyy HH:MM;;Q")
+			, LPFID->XORD[LPFID->XCNT].UPDTTM     = FORMAT(C.UPDT_DT_TM, "mm/dd/yyyy HH:MM;;Q")
+			, LPFID->XORD[LPFID->XCNT].TORDERID   = PFID->XORD[D.SEQ].ORDERID
+			, LPFID->XORD[LPFID->XCNT].PTRIDX     = PFID->XORD[D.SEQ].ITEMID
+			, LPFID->XORD[LPFID->XCNT].PINDX      = LPFID->XCNT
+			, LPFID->XORD[LPFID->XCNT].LSEQACTION = "RELINK"
+ 
+		WITH NOCOUNTER
+ 
+		FOR ( RLLPIDX = 1 TO LPFID->XCNT  )
+			SET POSIDX = LOCATEVAL(LOCIDX, 1, WKA->ICNT,
+				LPFID->XORD[RLLPIDX].SORDERID,
+				WKA->ITMS[LOCIDX].RORDER_ID
+			)
+ 
+			IF (POSIDX > 0 )
+				SET PFIDIDX = LPFID->XORD[RLLPIDX].PTRIDX
+				SET WKA->ITMS[POSIDX].RRELKORDID     = PFID->XORD[PFIDIDX].ORDERID
+				SET WKA->ITMS[POSIDX].RRELKORDDESC   = PFID->XORD[PFIDIDX].ORDERDESC
+				SET WKA->ITMS[POSIDX].RRELKORDKEY    = PFID->XORD[PFIDIDX].DISPLAYKEY
+				SET WKA->ITMS[POSIDX].RRELKORDCAT_CD = PFID->XORD[PFIDIDX].CATALOG_CD
+				;020
+				IF(CNVTUPPER(PFID->XORD[PFIDIDX].ORDSTATUS) = "FUTURE")
+					SET WKA->ITMS[POSIDX].RORDER_STAT    = CNVTUPPER(PFID->XORD[PFIDIDX].ORDSTATUS)
+				ELSE
+					;SET WKA->ITMS[POSIDX].RORDER_STAT    = PFID->XORD[PFIDIDX].ORDSTATUS
+					SET WKA->ITMS[POSIDX].RORDER_STAT = "FUTURE"
+				ENDIF
+				SET WKA->ITMS[POSIDX].RRLINKPAIR     = BUILD(WKA->ITMS[POSIDX].RORDER_ID,",",PFID->XORD[PFIDIDX].ORDERID)
+				SET WKA->ITMS[POSIDX].RRLINKPAIR     = BUILD("RLK",WKA->ITMS[POSIDX].RACTIVE_IND)
+				SET WKA->ITMS[POSIDX].RSEQACTION     = LPFID->XORD[RLLPIDX].LSEQACTION
+				SET WKA->ITMS[POSIDX].RUPDT_FLAG     = 1
+				SET PFID->XORD[PFIDIDX].EXCLUD_FLAG  = 333
+			ENDIF
+		ENDFOR
+	ENDIF
+ 
+	IF (WKA->ICNT > 0 )
+		SELECT
+			ITEM_INDX = D.SEQ
+		FROM
+			CUST_OPRDWL_ORD   C
+			, (DUMMYT D WITH SEQ = VALUE(SIZE(WKA->ITMS, 5)))
+		PLAN D
+			WHERE  WKA->ITMS[D.SEQ].RUPDT_FLAG  = 1
+		JOIN C
+			WHERE C.ORDER_ID = WKA->ITMS[D.SEQ].RORDER_ID
+			  AND C.ACTIVE_IND = WKA->ITMS[D.SEQ].RACTIVE_IND
+		DETAIL
+			 WKRC->ICNT = WKRC->ICNT + 1
+			,STAT = ALTERLIST(WKRC->ITMS,WKRC->ICNT)
+			,WKRC->ITMS[WKRC->ICNT].XACTIVE_IND     =  1
+			,WKRC->ITMS[WKRC->ICNT].XCATALOG_CD     =  WKA->ITMS[ITEM_INDX].RRELKORDCAT_CD
+			,WKRC->ITMS[WKRC->ICNT].XCT_MOD_CD      =  C.CT_MOD_CD
+			,WKRC->ITMS[WKRC->ICNT].XDISPLAYKEY     =  WKA->ITMS[ITEM_INDX].RRELKORDKEY
+			,WKRC->ITMS[WKRC->ICNT].XENCNTR_ID      =  C.ENCNTR_ID
+			,WKRC->ITMS[WKRC->ICNT].XEP_CE_EVT_ID   =  C.EP_CE_EVT_ID
+			,WKRC->ITMS[WKRC->ICNT].XGRP_PF_ID      =  C.GRP_PF_ID
+			,WKRC->ITMS[WKRC->ICNT].XITEM1          =  C.ITEM1
+			,WKRC->ITMS[WKRC->ICNT].XITEM1_CD       =  C.ITEM1_CD
+			,WKRC->ITMS[WKRC->ICNT].XITEM2          =  C.ITEM2
+			,WKRC->ITMS[WKRC->ICNT].XITEM2_CD       =  C.ITEM2_CD
+			,WKRC->ITMS[WKRC->ICNT].XMOD_TYPE       =  C.MOD_TYPE
+			,WKRC->ITMS[WKRC->ICNT].XORDERSTATE     =  WKA->ITMS[ITEM_INDX].RORDER_STAT
+			,WKRC->ITMS[WKRC->ICNT].XORDERSTATE_CD  =  C.ORDERSTATE_CD
+			,WKRC->ITMS[WKRC->ICNT].XORDER_DTTM     =  FORMAT(C.ORDER_DT_TM,"DD-MMM-YYYY HH:MM:SS;;D")
+			,WKRC->ITMS[WKRC->ICNT].XORDER_DT       =  FORMAT(C.ORDER_DT_TM,"MM-DD-YYYY;;D")
+			,WKRC->ITMS[WKRC->ICNT].XORDER_TM       =  FORMAT(C.ORDER_DT_TM,"HH:MM;;M")
+			,WKRC->ITMS[WKRC->ICNT].XORDER_ID       =  WKA->ITMS[ITEM_INDX].RRELKORDID
+			,WKRC->ITMS[WKRC->ICNT].XSORDER_ID      =  CNVTSTRING(WKA->ITMS[ITEM_INDX].RRELKORDID, 17,2)
+			,WKRC->ITMS[WKRC->ICNT].XORDER_ID_LINK  =  C.ORDER_ID
+			,WKRC->ITMS[WKRC->ICNT].XSORDER_ID_LINK =  CNVTSTRING( C.ORDER_ID ,17,2)
+			,WKRC->ITMS[WKRC->ICNT].XORDER_LOC      =  C.ORDER_LOC
+			,WKRC->ITMS[WKRC->ICNT].XORDER_MNEMONIC =  WKA->ITMS[ITEM_INDX].RRELKORDDESC
+			,WKRC->ITMS[WKRC->ICNT].XPERSON_ID      =  C.PERSON_ID
+			,WKRC->ITMS[WKRC->ICNT].XPFORM_ID       =  C.PFORM_ID
+			,WKRC->ITMS[WKRC->ICNT].XPF_CE_EVT_ID   =  C.PF_CE_EVT_ID
+			,WKRC->ITMS[WKRC->ICNT].XSCH_EVT_ID     =  C.SCH_CE_EVT_ID
+			,WKRC->ITMS[WKRC->ICNT].XSEQACTION      =  TRIM(WKA->ITMS[ITEM_INDX].RSEQACTION)
+			,WKRC->ITMS[WKRC->ICNT].XSEQACTION_CD   =  (C.SEQACTION_CD + 1)
+			,WKRC->ITMS[WKRC->ICNT].XUPDT_BY_ID     =  C.UPDT_BY_ID
+		WITH NOCOUNTER
+ 
+		IF ( WKRC->ICNT > 0 )
+ 
+			INSERT INTO
+				CUST_OPRDWL_HIST C,
+				(DUMMYT D WITH SEQ = SIZE(WKRC->ITMS,5))
+				SET C.ACTIVE_IND     = 1,
+				C.ACTION_STATE_CD  = 601,
+				C.FUNCOP_CD        = $FUNCOPER,
+				C.ORDERSTATE       = WKRC->ITMS[D.SEQ].XORDERSTATE,
+				C.ORDER_ID         = WKRC->ITMS[D.SEQ].XORDER_ID,
+				C.RECCLS_CD        = 601,
+				C.SEQACTION        = WKRC->ITMS[D.SEQ].XSEQACTION,
+				C.TBLREC           =  CONCAT("RELINK RECORDS","|",
+										WKRC->ITMS[D.SEQ].XSORDER_ID,
+										" TO ",
+										WKRC->ITMS[D.SEQ].XSORDER_ID_LINK,
+										CNVTSTRING(WKRC->ITMS[D.SEQ].XGRP_PF_ID,17,2)
+										),
+				C.UPDT_CNT         = 0,
+				C.UPDT_DT_TM       = CNVTDATETIME(CURDATE,CURTIME3),
+				C.UPDT_BY_ID       = $USERID
+ 
+			PLAN D
+			JOIN C
+			WITH NOCOUNTER,RDBARRAYINSERT = 1
+			COMMIT
+ 
+			INSERT INTO  CUST_OPRDWL_ORD C
+						  ,(DUMMYT D WITH SEQ = VALUE(SIZE(WKRC->ITMS, 5)))
+			  SET C.ACTIVE_IND    = WKRC->ITMS[D.SEQ].XACTIVE_IND
+			  , C.CATALOG_CD      = WKRC->ITMS[D.SEQ].XCATALOG_CD
+			  , C.CT_MOD_CD       = WKRC->ITMS[D.SEQ].XCT_MOD_CD
+			  , C.DISPLAYKEY      = TRIM(WKRC->ITMS[D.SEQ].XDISPLAYKEY)
+			  , C.ENCNTR_ID       = WKRC->ITMS[D.SEQ].XENCNTR_ID
+			  , C.EP_CE_EVT_ID    = WKRC->ITMS[D.SEQ].XEP_CE_EVT_ID
+			  , C.GRP_PF_ID       = WKRC->ITMS[D.SEQ].XGRP_PF_ID
+			  , C.ITEM1           = WKRC->ITMS[D.SEQ].XITEM1
+			  , C.ITEM1_CD        = WKRC->ITMS[D.SEQ].XITEM1_CD
+			  , C.ITEM2           = WKRC->ITMS[D.SEQ].XITEM2
+			  , C.ITEM2_CD        = WKRC->ITMS[D.SEQ].XITEM2_CD
+			  , C.MOD_TYPE        = WKRC->ITMS[D.SEQ].XMOD_TYPE
+			  , C.ORDERSTATE      = WKRC->ITMS[D.SEQ].XORDERSTATE
+			  , C.ORDERSTATE_CD   = WKRC->ITMS[D.SEQ].XORDERSTATE_CD
+			  , C.ORDER_DT_TM     = CNVTDATETIME(WKRC->ITMS[D.SEQ].XORDER_DTTM)
+			  , C.ORDER_ID        = WKRC->ITMS[D.SEQ].XORDER_ID
+			  , C.ORDER_ID_LINK   = WKRC->ITMS[D.SEQ].XORDER_ID_LINK
+			  , C.ORDER_LOC       = WKRC->ITMS[D.SEQ].XORDER_LOC
+			  , C.ORDER_MNEMONIC  = WKRC->ITMS[D.SEQ].XORDER_MNEMONIC
+			  , C.PERSON_ID       = WKRC->ITMS[D.SEQ].XPERSON_ID
+			  , C.PFORM_ID        = WKRC->ITMS[D.SEQ].XPFORM_ID
+			  , C.PF_CE_EVT_ID    = WKRC->ITMS[D.SEQ].XPF_CE_EVT_ID
+			  , C.SCH_CE_EVT_ID   = WKRC->ITMS[D.SEQ].XSCH_EVT_ID
+			  , C.SEQACTION       = WKRC->ITMS[D.SEQ].XSEQACTION
+			  , C.SEQACTION_CD    = 0 ;WKRC->ITMS[D.SEQ].XSEQACTION_CD
+			  , C.UPDT_DT_TM      = CNVTDATETIME(CURDTTM)
+			  , C.UPDT_BY_ID      = WKRC->ITMS[D.SEQ].XUPDT_BY_ID
+			PLAN D
+			JOIN C
+			WITH NOCOUNTER,RDBARRAYINSERT = 1
+			COMMIT
+ 
+			IF (CURQUAL = 0 )
+				SET RPTDATA->ERR_STAT 	 = "TRUE"
+				SET RPTDATA->ERR_DET_CNT = RPTDATA->ERR_DET_CNT + 1
+				SET STAT 				 = ALTERLIST(RPTDATA->ERR_DETAIL, RPTDATA->ERR_DET_CNT)
+				SET RPTDATA->ERR_DETAIL[RPTDATA->ERR_DET_CNT].ERR_ITEM = BUILD(
+							  "ERR - Insert New Record to the CUST_OPRDWL_ORD table:")
+			ELSE
+ 
+				UPDATE INTO CUST_OPRDWL_ORD C
+					,(DUMMYT D WITH SEQ = VALUE(SIZE(WKA->ITMS, 5)))
+					SET C.ORDERSTATE_CD = 1
+				PLAN D
+					WHERE WKA->ITMS[D.SEQ].RUPDT_FLAG  = 1
+					  AND WKA->ITMS[D.SEQ].RSEQACT_CD  = 105
+					  AND WKA->ITMS[D.SEQ].RGROUP_PFID > 0
+				JOIN C
+					WHERE C.GRP_PF_ID = WKA->ITMS[D.SEQ].RGROUP_PFID
+					AND   C.SEQACTION_CD = WKA->ITMS[D.SEQ].RSEQACT_CD
+					AND   C.ACTIVE_IND > 0
+				WITH NOCOUNTER
+				COMMIT
+ 
+ 
+				UPDATE INTO CUST_OPRDWL_ORD C
+					,(DUMMYT D WITH SEQ = VALUE(SIZE(WKA->ITMS, 5)))
+					SET  C.ACTIVE_IND 	= 9
+						,C.ORDERSTATE 	= "CANCELLED4"
+						,C.SEQACTION_CD = WKRC->ITMS[D.SEQ].XSEQACTION_CD
+						,C.ITEM1 		= SUBSTRING(1,500, CONCAT(C.ITEM1,"|",CURDTTM))
+						,C.ITEM2 		= CURDTTM
+						,C.ITEM1_CD 	= 0
+				PLAN D
+					WHERE WKA->ITMS[D.SEQ].RUPDT_FLAG  = 1
+					  ;AND WKA->ITMS[D.SEQ].RGROUP_PFID = 0
+				JOIN C
+					WHERE C.ORDER_ID   = WKA->ITMS[D.SEQ].RORDER_ID
+					AND   C.ACTIVE_IND = WKA->ITMS[D.SEQ].RACTIVE_IND
+				WITH NOCOUNTER
+				COMMIT
+				SET RPTDATA->FNCRESP_DETAIL = BUILD(RPTDATA->FNCRESP_DETAIL, " COUNT UPDATED: " ,WKRC->ICNT)
+			 ENDIF
+		ENDIF
+	ENDIF
+;	SET _Memory_Reply_String = CNVTRECTOJSON(WKRC)
+;	SET DEBUG_CTL_FLAG = 1
+  FREE RECORD WKRC
+  FREE RECORD WKA
+  FREE RECORD LPFID
+END ;SUBROUTINE
+;==================================================================================
+SUBROUTINE   SRORDCNL ( NULL )
+;----------------------------------------------------------------------------------
+RECORD WKA1 (
+  1 ICNT  		 = I4
+  1 ITEMS_LOG  		 = VC
+  1 ITMS  [*]
+    2 EXCLUD_FLAG 	 = I4
+    2 ORDER_ID 		 = F8
+    2 ENCOUNTERID 	 = F8
+    2 PERSONID 		 = F8
+    2 EVENT_ID 		 = F8
+    2 ORDERSTATE 	 = VC
+    2 ITEM_VAL 		 = F8
+    2 ITEM_VAL2 	 = F8
+    2 ITEM_VAL3 	 = F8
+    2 ITEM_TXTVAL 	 = VC
+    2 ITEM_TXTVAL2 	 = VC
+    2 ITEM_TXTVAL3 	 = VC
+    2 ITEM_TXTVAL4 	 = VC
+    2 ITEM_COMPL_ACT = F8
+    2 SCH_EVT_ID 	 = F8
+    2 SEQ_ACTION_CD  =F8
+    2 DEPT_STAT_CD 	 = F8
+    2 CT_MOD_CD 	 = F8
+    2 EP_CE_EVT_ID 	 = F8
+    2 UPT_DTTM_DISP  = VC
+    2 UPT_DTTM_DISP2 = VC
+    2 UPT_DTTM 		 = DQ8
+    2 GRPPF_ID       = F8
+	2 RELINK_ID      = F8
+)
+RECORD WAO (
+  1 ICNT  = I4
+  1 ITEMS_LOG  = VC
+  1 ITMS  [*]
+    2 ORDER_ID   = F8
+    2 SCH_EVT_ID = F8
+    2 GRPPF_ID   = F8
+)
+ 
+ 
+	SELECT INTO "NL:"
+	FROM
+		ORDER_FUTURE_INFO   O
+		, CUST_OPRDWL_ORD   C
+	PLAN C
+		WHERE C.ACTIVE_IND = 1
+		 AND  C.ORDERSTATE = "FUTURE"
+	JOIN O
+		WHERE O.ORDER_ID = OUTERJOIN(C.ORDER_ID)
+ 
+	ORDER BY
+	O.ORDER_ID  DESC
+	DETAIL
+		IF ( O.ORDER_ID = 0)
+			WAO->ICNT = WAO->ICNT + 1
+			,STAT = ALTERLIST(WAO->ITMS,WAO->ICNT)
+			,WAO->ITMS[WAO->ICNT]->ORDER_ID = C.ORDER_ID
+		ENDIF
+	WITH NOCOUNTER, TIME = 20
+	IF (WAO->ICNT > 0 )
+		UPDATE INTO CUST_OPRDWL_ORD C
+			,(DUMMYT D WITH SEQ = VALUE(SIZE(WAO->ITMS, 5)))
+			SET C.ACTIVE_IND = 99
+		PLAN D
+		JOIN C
+			WHERE C.ORDER_ID = WAO->ITMS[D.SEQ].ORDER_ID
+			AND C.ACTIVE_IND = 1
+		WITH NOCOUNTER
+		COMMIT
+	ENDIF
+ 
+	SELECT INTO "NL:"
+	FROM
+		ORDERS ORD
+		, CUST_OPRDWL_ORD   C
+	PLAN C
+		WHERE C.ACTIVE_IND = 99
+	JOIN ORD
+		WHERE ORD.ORDER_ID = C.ORDER_ID
+ 
+	DETAIL
+		WKA1->ICNT = WKA1->ICNT + 1
+		,STAT = ALTERLIST(WKA1->ITMS,WKA1->ICNT)
+		,WKA1->ITMS[WKA1->ICNT]->EXCLUD_FLAG    = 0
+		,WKA1->ITMS[WKA1->ICNT]->ORDER_ID       = C.ORDER_ID
+		,WKA1->ITMS[WKA1->ICNT]->SEQ_ACTION_CD  = C.SEQACTION_CD
+		,WKA1->ITMS[WKA1->ICNT]->ENCOUNTERID    = C.ENCNTR_ID
+		,WKA1->ITMS[WKA1->ICNT]->PERSONID       = C.PERSON_ID
+		,WKA1->ITMS[WKA1->ICNT]->ORDERSTATE     = C.ORDERSTATE
+		,WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL4   = BUILD( C.ORDER_ID,"|",C.PERSON_ID ,"|",C.ENCNTR_ID)
+		,WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL3   = SUBSTRING(1,10,UAR_GET_CODE_DISPLAY(ORD.DEPT_STATUS_CD))
+		,WKA1->ITMS[WKA1->ICNT]->DEPT_STAT_CD   = ORD.DEPT_STATUS_CD
+		,WKA1->ITMS[WKA1->ICNT]->CT_MOD_CD      = C.CT_MOD_CD
+		,WKA1->ITMS[WKA1->ICNT]->SCH_EVT_ID     = C.SCH_CE_EVT_ID
+		,WKA1->ITMS[WKA1->ICNT]->GRPPF_ID       = C.GRP_PF_ID
+  		,WKA1->ITMS[WKA1->ICNT]->ITEM_VAL       = 9
+		,WKA1->ITMS[WKA1->ICNT]->EP_CE_EVT_ID   = C.EP_CE_EVT_ID
+		,WKA1->ITMS[WKA1->ICNT]->UPT_DTTM       = C.UPDT_DT_TM
+		,WKA1->ITMS[WKA1->ICNT]->UPT_DTTM_DISP  = FORMAT(C.UPDT_DT_TM,"MM/DD/YYYY HH:MM:SS;;Q")
+		,WKA1->ITMS[WKA1->ICNT]->UPT_DTTM_DISP2 = FORMAT(C.UPDT_DT_TM,"DD-MMM-YYYY HH:MM:SS;;Q")
+		,WKA1->ITMS[WKA1->ICNT]->RELINK_ID      = C.ORDER_ID_LINK
+		,CASE (ORD.ORDER_STATUS_CD)
+			OF 2550.00:WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL2 = "ACTIVE",
+			    WKA1->ITMS[WKA1->ICNT]->SEQ_ACTION_CD = 0
+				WKA1->ITMS[WKA1->ICNT]->ITEM_VAL = 1
+			;020
+			ELSE
+			    ;WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL2 = SUBSTRING(1,10,UAR_GET_CODE_DISPLAY(ORD.ORDER_STATUS_CD))
+			    WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL2 = "FUTURE"
+		ENDCASE
+	WITH NOCOUNTER, TIME = 20
+ 
+	SELECT INTO "NL:"
+	FROM
+		ORDERS ORD
+		, CUST_OPRDWL_ORD   C
+	PLAN C
+		WHERE C.ACTIVE_IND =  1
+	  	 AND (C.ORDERSTATE = "ACTIVE" )
+ 
+	JOIN ORD
+		WHERE ORD.ORDER_ID = C.ORDER_ID
+		AND ORD.ORDER_STATUS_CD != 2550
+ 
+	DETAIL
+		WKA1->ICNT = WKA1->ICNT + 1
+		,STAT = ALTERLIST(WKA1->ITMS,WKA1->ICNT)
+		,WKA1->ITMS[WKA1->ICNT]->EXCLUD_FLAG   = 0
+		,WKA1->ITMS[WKA1->ICNT]->ORDER_ID      = C.ORDER_ID
+		,WKA1->ITMS[WKA1->ICNT]->SEQ_ACTION_CD = C.SEQACTION_CD
+		,WKA1->ITMS[WKA1->ICNT]->ENCOUNTERID   = C.ENCNTR_ID
+		,WKA1->ITMS[WKA1->ICNT]->PERSONID      = C.PERSON_ID
+		,WKA1->ITMS[WKA1->ICNT]->ORDERSTATE    = C.ORDERSTATE
+		,WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL4  = BUILD(
+			CNVTSTRING(C.ORDER_ID, 17,2),"|",
+			CNVTSTRING(C.PERSON_ID,17,2) ,"|",
+			CNVTSTRING(C.GRP_PF_ID,17,2) ,"|"
+			)
+		,WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL3  = SUBSTRING(1,10,UAR_GET_CODE_DISPLAY(ORD.DEPT_STATUS_CD))
+		,WKA1->ITMS[WKA1->ICNT]->DEPT_STAT_CD  = ORD.DEPT_STATUS_CD
+		,WKA1->ITMS[WKA1->ICNT]->CT_MOD_CD     = C.CT_MOD_CD
+		,WKA1->ITMS[WKA1->ICNT]->SCH_EVT_ID    = C.SCH_CE_EVT_ID
+		,WKA1->ITMS[WKA1->ICNT]->ITEM_VAL      = 9
+		,WKA1->ITMS[WKA1->ICNT]->EP_CE_EVT_ID  = C.EP_CE_EVT_ID
+		,WKA1->ITMS[WKA1->ICNT]->UPT_DTTM      = C.UPDT_DT_TM
+		,WKA1->ITMS[WKA1->ICNT]->UPT_DTTM_DISP = FORMAT(C.UPDT_DT_TM,"MM/DD/YYYY HH:MM:SS;;Q")
+		,WKA1->ITMS[WKA1->ICNT]->UPT_DTTM_DISP2 = FORMAT(C.UPDT_DT_TM,"DD-MMM-YYYY HH:MM:SS;;Q")
+		,WKA1->ITMS[WKA1->ICNT]->ITEM_TXTVAL2 = SUBSTRING(1,10,UAR_GET_CODE_DISPLAY(ORD.ORDER_STATUS_CD))
+	WITH NOCOUNTER, TIME = 20
+	IF (WKA1->ICNT > 0 )
+ 
+		SELECT INTO "nl:"
+			ITEM_INDX = D.SEQ
+		FROM
+			 ORDERS O
+			 , (DUMMYT D WITH SEQ = VALUE(SIZE(WKA1->ITMS, 5)))
+ 
+		PLAN D
+			WHERE WKA1->ITMS[D.SEQ]->ORDERSTATE = "ACTIVE"
+			AND WKA1->ITMS[D.SEQ]->ITEM_VAL = 9
+ 
+		JOIN O
+			WHERE O.ORDER_ID = WKA1->ITMS[D.SEQ]->ORDER_ID
+			  AND O.DEPT_STATUS_CD IN (9312,9314,9316)
+;			  AND O.DEPT_STATUS_CD IN (9310,9312,9314,9316)
+		DETAIL
+			WKA1->ITMS[ITEM_INDX]-> ITEM_COMPL_ACT = 1
+ 
+		WITH NOCOUNTER, TIME = 20
+ 
+		 SELECT INTO "NL:"
+			 ITEM_INDX = D.SEQ
+		 FROM
+			 (DUMMYT D WITH SEQ = VALUE(SIZE(WKA1->ITMS, 5)))
+ 
+		 WHERE WKA1->ITMS[D.SEQ]-> EXCLUD_FLAG    = 0
+		   AND WKA1->ITMS[D.SEQ]-> ITEM_VAL       = 9
+		   AND WKA1->ITMS[D.SEQ]-> ORDERSTATE     = "ACTIVE"
+		   AND WKA1->ITMS[D.SEQ]-> ITEM_COMPL_ACT = 0
+		   AND WKA1->ITMS[D.SEQ]-> SEQ_ACTION_CD  = 0
+ 
+		 DETAIL
+			 WKA1->ITMS[ITEM_INDX]->ITEM_TXTVAL2   = "MODIFY2"
+			 WKA1->ITMS[ITEM_INDX]->SEQ_ACTION_CD = 200
+			 WKA1->ITMS[ITEM_INDX]->ITEM_VAL = 98
+ 
+		 WITH NOCOUNTER, TIME = 10
+ 
+		SELECT
+			ITEM_INDX = D.SEQ
+		FROM
+			(DUMMYT D WITH SEQ = VALUE(SIZE(WKA1->ITMS, 5)))
+ 
+		PLAN D
+			WHERE WKA1->ITMS[D.SEQ]->CT_MOD_CD     > 0
+			  AND WKA1->ITMS[D.SEQ]->SEQ_ACTION_CD = 105
+			  AND WKA1->ITMS[D.SEQ]-> ORDERSTATE   = "FUTURE"
+       AND WKA1->ITMS[D.SEQ]->RELINK_ID     = 0
+		DETAIL
+			WKA1->ITMS[ITEM_INDX]->ITEM_TXTVAL2	   = "MODIFY1"
+			WKA1->ITMS[ITEM_INDX]->ITEM_VAL        = 97
+		WITH NOCOUNTER, TIME = 20
+ 
+		SELECT
+			ITEM_INDX = D.SEQ
+		FROM
+			CLINICAL_EVENT  CE
+			,(DUMMYT D WITH SEQ = VALUE(SIZE(WKA1->ITMS, 5)))
+ 
+		PLAN D
+			WHERE WKA1->ITMS[D.SEQ]->ITEM_VAL   = 9
+			  AND WKA1->ITMS[D.SEQ]->ORDERSTATE = 'FUTURE'
+		JOIN CE
+			WHERE CE.PARENT_EVENT_ID =  WKA1->ITMS[D.SEQ]->EP_CE_EVT_ID
+			  AND CE.VALID_UNTIL_DT_TM  = CNVTDATETIME("31-DEC-2100 00:00:00")
+			  AND CE.EVENT_CD = 204661795
+			  AND CE.PUBLISH_FLAG =1
+			  AND CE.RESULT_STATUS_CD IN (
+					ATHRSLTSTCD,
+					ALTRSLSTCD,
+					MODRSLSTCD); (35,25,34)
+			  AND CE.EVENT_TAG!="DATE\TIME CORRECTION"
+		ORDER BY
+			CE.EVENT_CD
+			, CE.EVENT_END_DT_TM   DESC
+		DETAIL
+			WKA1->ITMS[ITEM_INDX]->ITEM_TXTVAL2 = WKA1->ITMS[ITEM_INDX]->ITEM_TXTVAL3
+			WKA1->ITMS[ITEM_INDX]->ITEM_VAL = 96
+		WITH NOCOUNTER, TIME = 20
+ 
+ 		SELECT
+			ITEM_INDX = D.SEQ
+		FROM
+			(DUMMYT D WITH SEQ = VALUE(SIZE(WKA1->ITMS, 5)))
+ 
+		PLAN D
+			WHERE WKA1->ITMS[D.SEQ]->SEQ_ACTION_CD 	= 300
+			  AND WKA1->ITMS[D.SEQ]-> ORDERSTATE   	= "ACTIVE"
+		DETAIL
+			WKA1->ITMS[ITEM_INDX]->ITEM_TXTVAL2 	= "MODIFY3"
+			WKA1->ITMS[ITEM_INDX]->ITEM_VAL     	= 95
+		WITH NOCOUNTER, TIME = 20
+ 
+		INSERT INTO
+			CUST_OPRDWL_HIST C,
+			(DUMMYT D WITH SEQ = SIZE(WKA1->ITMS,5))
+			SET C.ACTIVE_IND     = 1,
+			C.ACTION_STATE_CD  = 600,
+			C.FUNCOP_CD        = $FUNCOPER,
+			C.ORDERSTATE       = WKA1->ITMS[D.SEQ]->ITEM_TXTVAL2,
+			C.ORDER_ID         = WKA1->ITMS[D.SEQ]->ORDER_ID,
+			C.RECCLS_CD        = 600,
+			C.SEQACTION        = WKA1->ITMS[D.SEQ]->ITEM_TXTVAL3,
+			C.TBLREC           = CONCAT(WKA1->ITMS[D.SEQ]->ITEM_TXTVAL4,"|",
+			  						WKA1->ITMS[D.SEQ]->ORDERSTATE,"|",
+				  					CNVTSTRING(WKA1->ITMS[D.SEQ]->ITEM_VAL),"|",
+								    WKA1->ITMS[D.SEQ]->UPT_DTTM_DISP),
+			C.UPDT_CNT         = 0,
+			C.UPDT_DT_TM       = CNVTDATETIME(CURDATE,CURTIME3),
+			C.UPDT_BY_ID       = $USERID
+ 
+		PLAN D
+			WHERE WKA1->ITMS[D.SEQ]->EXCLUD_FLAG = 0
+			 AND  WKA1->ITMS[D.SEQ]->ITEM_VAL IN (1,9,95,96,97,98)
+		JOIN C
+		WITH NOCOUNTER,RDBARRAYINSERT = 1
+		COMMIT
+ 
+		UPDATE INTO CUST_OPRDWL_ORD C
+			,(DUMMYT D WITH SEQ = VALUE(SIZE(WKA1->ITMS, 5)))
+			SET C.ACTIVE_IND = WKA1->ITMS[D.SEQ]->ITEM_VAL
+			,C.ORDERSTATE    = WKA1->ITMS[D.SEQ].ITEM_TXTVAL2
+			,C.SEQACTION     = WKA1->ITMS[D.SEQ].ITEM_TXTVAL3
+			,C.SEQACTION_CD  = WKA1->ITMS[D.SEQ]->SEQ_ACTION_CD
+			,C.ITEM1_CD      = 0
+			,C.ITEM1         = SUBSTRING(1,500, CONCAT(C.ITEM1,"|",WKA1->ITMS[D.SEQ]->UPT_DTTM_DISP))
+			,C.ITEM2         = WKA1->ITMS[D.SEQ]->UPT_DTTM_DISP
+			,C.UPDT_DT_TM = CNVTDATETIME(CURDATE,CURTIME3)
+		PLAN D
+			WHERE WKA1->ITMS[D.SEQ]->EXCLUD_FLAG = 0
+		JOIN C
+			WHERE C.ORDER_ID = WKA1->ITMS[D.SEQ].ORDER_ID
+			  AND C.ACTIVE_IND in (1, 99)
+		WITH NOCOUNTER
+		COMMIT
+	ENDIF
+	FREE RECORD WKA1
+	FREE RECORD WAO
+ END ;SUBROUTINE
+;==================================================================================
+SUBROUTINE   SRLDCTBL (IDX )
+;----------------------------------------------------------------------------------
+DECLARE LDPFORMID = F8
+DECLARE TIMESTR = VC
+DECLARE DATESTR = VC
+DECLARE STRWRK = VC
+SET DATESTR = PIECE(PFID -> XORD[IDX] ->DATEORDER," ",1,"01/01/1900")
+SET TIMESTR = PIECE(PFID -> XORD[IDX] ->DATEORDER," ",2,"00:00")
+SET LDPFORMID = PFID-> XORD[IDX].PFORMID
+	IF ($FOSTATE = "MPLINK" AND LDPFORMID = 0)
+		SET LDPFORMID = 1
+	ENDIF
+   SELECT INTO "nl:"
+   FROM CUST_OPRDWL_ORD C
+   WHERE C.ORDER_ID = PFID -> XORD[IDX]-> ORDERID
+   AND C.ACTIVE_IND = 1
+   WITH NOCOUNTER
+ 
+   IF (CURQUAL > 0 )
+      UPDATE INTO CUST_OPRDWL_ORD C
+        SET C.ACTIVE_IND = 0
+      WHERE C.ORDER_ID = PFID -> XORD[IDX]-> ORDERID
+        AND C.ACTIVE_IND = 1
+      WITH NOCOUNTER
+      COMMIT
+ 
+      IF (CURQUAL = 0 )
+         SET RPTDATA->ERR_STAT = "TRUE"
+         SET RPTDATA->ERR_DET_CNT = RPTDATA->ERR_DET_CNT + 1
+         SET STAT = ALTERLIST(RPTDATA->ERR_DETAIL, RPTDATA->ERR_DET_CNT)
+         SET RPTDATA->ERR_DETAIL[RPTDATA->ERR_DET_CNT].ERR_ITEM =
+        				 BUILD(  "ERR - Setting Active_IND to 0 Record to the CUST_OPRDWL_ORD table","::",IDX,
+        				 "::",PFID -> XORD[IDX]-> ORDERID)
+      ENDIF
+   ENDIF
+   IF (RPTDATA->ERR_STAT = "FALSE")
+		INSERT INTO  CUST_OPRDWL_ORD C
+		  SET C.ACTIVE_IND    = 1
+			, C.CATALOG_CD	  = PFID -> XORD[IDX].CATALOG_CD
+			, C.CT_MOD_CD     = PFID -> XORD[IDX].CT_MOD_CD
+			, C.DISPLAYKEY    = PFID -> XORD[IDX].DISPLAYKEY
+			, C.ENCNTR_ID     = PFID -> XORD[IDX].ENCTR_ID
+			, C.EP_CE_EVT_ID  = PFID -> XORD[IDX].EP_CE_EVTID
+			, C.GRP_PF_ID     = 0
+			, C.ITEM1		  = ""
+			, C.ITEM1_CD      = 0
+			, C.ITEM2         = ""
+			, C.ITEM2_CD      = 0
+			, C.MOD_TYPE      = PFID -> XORD[IDX].MODTYPE
+			, C.ORDERSTATE    = "FUTURE"
+			, C.ORDERSTATE_CD = 0
+			, C.ORDER_DT_TM   = CNVTDATETIME( CNVTDATE2( DATESTR,"MM/DD/YYYY"),CNVTTIME2(TIMESTR,"HH:MM"))
+			, C.ORDER_ID      = PFID -> XORD[IDX].ORDERID
+			, C.ORDER_ID_LINK = 0
+			, C.ORDER_LOC     = PFID -> XORD[IDX].ORDERLOC
+			, C.ORDER_MNEMONIC= PFID -> XORD[IDX].ORDERDESC
+			, C.PERSON_ID     = PFID -> XORD[IDX].PERSONID
+			, C.PFORM_ID      = LDPFORMID
+			, C.PF_CE_EVT_ID  = PFID -> XORD[IDX].PF_CE_EVTID
+			, C.SCH_CE_EVT_ID = PFID -> XORD[IDX].SCH_EVTID
+			, C.SEQACTION     = "LINK"
+			, C.SEQACTION_CD  = 0
+  		    , C.UPDT_DT_TM    = CNVTDATETIME(CURDATE,CURTIME3)
+		    , C.UPDT_BY_ID    = $USERID
+		WITH NOCOUNTER
+		COMMIT
+ 
+        IF (CURQUAL = 0 )
+            SET RPTDATA->ERR_STAT = "TRUE"
+            SET RPTDATA->ERR_DET_CNT = RPTDATA->ERR_DET_CNT + 1
+            SET STAT = ALTERLIST(RPTDATA->ERR_DETAIL, RPTDATA->ERR_DET_CNT)
+            SET RPTDATA->ERR_DETAIL[RPTDATA->ERR_DET_CNT].ERR_ITEM =
+                    "ERR - Insert New Record to the CUST_OPRDWL_ORD table"
+        ENDIF
+	ENDIF
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDLKORD (NULL)
+ 
+    SELECT INTO "nl:"
+    FROM CUST_OPRDWL_ORD C
+ 
+    WHERE C.ORDERSTATE = PATSTRING("FUTURE")
+    	AND C.pform_id > 0
+        AND C.ACTIVE_IND = 1
+    DETAIL
+      PFID -> XCNT = PFID ->XCNT  + 1
+      ,STAT = ALTERLIST ( PFID -> XORD ,  PFID -> XCNT )
+      ,PFID -> XORD[PFID -> XCNT] -> ITEMID         = PFID -> XCNT
+  		,PFID -> XORD[PFID -> XCNT] -> ACTIVEIND      = C.ACTIVE_IND
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERID        = C.ORDER_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERID_DESC   = CONCAT(TRIM(CNVTSTRING(C.ORDER_ID)),":",C.ORDER_MNEMONIC)
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERDESC      = C.ORDER_MNEMONIC
+      ,PFID -> XORD[PFID -> XCNT] -> ORIGENCTRID    = C.ENCNTR_ID
+  	  ,PFID -> XORD[PFID -> XCNT] -> ENCTR_ID	    = C.ENCNTR_ID
+      ,PFID -> XORD[PFID -> XCNT] -> PF_CE_EVTID    = C.PF_CE_EVT_ID
+      ,PFID -> XORD[PFID -> XCNT] -> EP_CE_EVTID    = C.EP_CE_EVT_ID
+      ,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERDTTM      = C.ORDER_DT_TM
+      ,PFID -> XORD[PFID -> XCNT] -> DATEORDER      = FORMAT(C.ORDER_DT_TM,"MM-DD-YYYY HH:MM;;Q")
+      ,PFID -> XORD[PFID -> XCNT] -> MODIFYFLAG     = "No"
+      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATUS = "Initalized"
+      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATLVL= 1
+      ,PFID -> XORD[PFID -> XCNT] -> MODTYPE        = C.MOD_TYPE
+      ,PFID -> XORD[PFID -> XCNT] -> EPREORDERCHGS  = "DEFAULT_VALUE"
+      ,PFID -> XORD[PFID -> XCNT] -> EXAMFORMID     = EPPFRFID
+      ,PFID -> XORD[PFID -> XCNT] -> RELINKFLAG     = C.SEQACTION
+      ,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+      ,PFID -> XORD[PFID -> XCNT] -> PERSONID       = C.PERSON_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERLOC       = C.ORDER_LOC
+ 	  ,PFID -> XORD[PFID -> XCNT] -> CT_MOD_CD	    = C.CT_MOD_CD
+ 	  ,PFID -> XORD[PFID -> XCNT] -> CATALOG_CD     = C.CATALOG_CD
+ 	  ,PFID -> XORD[PFID -> XCNT] -> GROUP_PFID     = C.GRP_PF_ID
+  	  ,PFID -> XORD[PFID -> XCNT] -> SCH_EVTID      = C.SCH_CE_EVT_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDSTATE_CD    = C.ORDERSTATE_CD
+    WITH NOCOUNTER
+ 
+	SELECT
+		XID       = PFID->XORD[D1.SEQ].ITEMID
+	FROM
+		CUST_OPRDWL_RADORD C
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+	PLAN D1
+		WHERE PFID-> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+	JOIN C
+	WHERE C.CATALOG_CD = PFID-> XORD[D1.SEQ] -> CATALOG_CD
+	  AND C.ACTIVE_IND > 0 ; = 1
+	DETAIL
+		PFID-> XORD[XID] -> SUBTYPE_CD = C.SUBTYPE_CD
+	WITH NOCOUNTER
+ 
+	SELECT
+		XID       = PFID->XORD[D1.SEQ].ITEMID
+	FROM
+		(DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+		WHERE PFID-> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+              AND PFID-> XORD[D1.SEQ] ->MODTYPE    IN (
+                                ;633747.00,     ; ORD_CT_SUBTYPE,
+                                633748.00,     ; ORD_IR_SUBTYPE,
+                                ;633750.00,     ; ORD_MR_SUBTYPE,  ;
+                                ;633751.00,     ; ORD_NM_SUBTYPE   ;
+                                61072547.00   ; ORD_FL_SUBTYPE   ;
+                                ;110440686.00   ; ORD_PT_SUBTYPE,  ;
+                                )
+	DETAIL
+		PFID-> XORD[XID] -> EXCLUD_FLAG =  10
+	WITH NOCOUNTER
+ 
+ 
+ 
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDLKORDAR3 (NULL)
+;----------------------------------------------------------------------------------
+	SELECT INTO "nl:"
+	FROM CUST_OPRDWL_ORD C
+ 
+	WHERE C.ACTIVE_IND IN( 1,95)
+    	AND C.seqaction_cd = 300
+	DETAIL
+		PFID -> XCNT = PFID ->XCNT  + 1
+		,STAT = ALTERLIST ( PFID -> XORD ,  PFID -> XCNT )
+		,PFID -> XORD[PFID -> XCNT] -> ITEMID         = PFID -> XCNT
+		,PFID -> XORD[PFID -> XCNT] -> ACTIVEIND      = C.ACTIVE_IND
+		,PFID -> XORD[PFID -> XCNT] -> ARIND          = C.ACTIVE_IND
+		,PFID -> XORD[PFID -> XCNT] -> ORDERID        = C.ORDER_ID
+		,PFID -> XORD[PFID -> XCNT] -> ORDERID_DESC   = CONCAT(TRIM(CNVTSTRING(C.ORDER_ID)),":",C.ORDER_MNEMONIC)
+		,PFID -> XORD[PFID -> XCNT] -> ORDERDESC      = C.ORDER_MNEMONIC
+		,PFID -> XORD[PFID -> XCNT] -> ORIGENCTRID    = C.ENCNTR_ID
+		,PFID -> XORD[PFID -> XCNT] -> ENCTR_ID	      = C.ENCNTR_ID
+		,PFID -> XORD[PFID -> XCNT] -> PF_CE_EVTID    = C.PF_CE_EVT_ID
+		,PFID -> XORD[PFID -> XCNT] -> EP_CE_EVTID    = C.EP_CE_EVT_ID
+		,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+		,PFID -> XORD[PFID -> XCNT] -> ORDERDTTM      = C.ORDER_DT_TM
+		,PFID -> XORD[PFID -> XCNT] -> DATEORDER      = FORMAT(C.ORDER_DT_TM,"MM-DD-YYYY HH:MM;;Q")
+		,PFID -> XORD[PFID -> XCNT] -> MODIFYFLAG     = "No"
+		,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATUS = "Initalized"
+		,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATLVL= 1
+		,PFID -> XORD[PFID -> XCNT] -> MODTYPE        = C.MOD_TYPE
+		,PFID -> XORD[PFID -> XCNT] -> EPREORDERCHGS  = "DEFAULT_VALUE"
+		,PFID -> XORD[PFID -> XCNT] -> EXAMFORMID     = EPPFRFID
+		,PFID -> XORD[PFID -> XCNT] -> RELINKFLAG     = C.SEQACTION
+		,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+		,PFID -> XORD[PFID -> XCNT] -> PERSONID       = C.PERSON_ID
+		,PFID -> XORD[PFID -> XCNT] -> ORDERLOC       = C.ORDER_LOC
+		,PFID -> XORD[PFID -> XCNT] -> CT_MOD_CD      = C.CT_MOD_CD
+		,PFID -> XORD[PFID -> XCNT] -> CATALOG_CD     = C.CATALOG_CD
+		,PFID -> XORD[PFID -> XCNT] -> GROUP_PFID     = C.GRP_PF_ID
+		,PFID -> XORD[PFID -> XCNT] -> SCH_EVTID      = C.SCH_CE_EVT_ID
+	WITH NOCOUNTER
+ 
+	SELECT
+		XID       = PFID->XORD[D1.SEQ].ITEMID
+	FROM
+		CUST_OPRDWL_RADORD C
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+	PLAN D1
+		WHERE PFID-> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+      AND PFID-> XORD[D1.SEQ]->SUBTYPE_CD        =  0
+	JOIN C
+	WHERE C.CATALOG_CD = PFID-> XORD[D1.SEQ] -> CATALOG_CD
+	  AND C.ACTIVE_IND = 1
+	DETAIL
+		PFID-> XORD[XID] -> SUBTYPE_CD = C.SUBTYPE_CD
+	WITH NOCOUNTER
+ 
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDLKORDSPCRG (NULL)
+;----------------------------------------------------------------------------------
+	SELECT INTO "nl:"
+	FROM CUST_OPRDWL_ORD C
+ 
+	WHERE C.ORDERSTATE = PATSTRING("FUTURE")
+	  AND C.PFORM_ID > 0
+	  AND C.ACTIVE_IND = 1
+	  AND C.ORDER_DT_TM BETWEEN CNVTDATETIME(CNVTDATE2( $SDATE,"MM/DD/YYYY"))
+	  AND CNVTDATETIME( CNVTDATE2( $EDATE,"MM/DD/YYYY"),CNVTTIME2("23:59:59","HH:MM:SS"))
+ 
+	DETAIL
+		PFID -> XCNT = PFID ->XCNT  + 1
+		,STAT = ALTERLIST ( PFID -> XORD ,  PFID -> XCNT )
+		,PFID -> XORD[PFID -> XCNT] -> ITEMID         = PFID -> XCNT
+		,PFID -> XORD[PFID -> XCNT] -> ORDERID        = C.ORDER_ID
+		,PFID -> XORD[PFID -> XCNT] -> ORDERID_DESC   = CONCAT(TRIM(CNVTSTRING(C.ORDER_ID)),":",C.ORDER_MNEMONIC)
+		,PFID -> XORD[PFID -> XCNT] -> ORDERDESC      = C.ORDER_MNEMONIC
+		,PFID -> XORD[PFID -> XCNT] -> ORIGENCTRID    = C.ENCNTR_ID
+		,PFID -> XORD[PFID -> XCNT] -> ENCTR_ID       = C.ENCNTR_ID
+		,PFID -> XORD[PFID -> XCNT] -> PF_CE_EVTID    = C.PF_CE_EVT_ID
+		,PFID -> XORD[PFID -> XCNT] -> EP_CE_EVTID    = C.EP_CE_EVT_ID
+		,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+		,PFID -> XORD[PFID -> XCNT] -> ORDERDTTM      = C.ORDER_DT_TM
+		,PFID -> XORD[PFID -> XCNT] -> DATEORDER      = FORMAT(C.ORDER_DT_TM,"MM-DD-YYYY HH:MM;;Q")
+		,PFID -> XORD[PFID -> XCNT] -> MODIFYFLAG     = "No"
+		,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATUS = "Initalized"
+		,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATLVL= 1
+		,PFID -> XORD[PFID -> XCNT] -> MODTYPE        = C.MOD_TYPE
+		,PFID -> XORD[PFID -> XCNT] -> EPREORDERCHGS  = "DEFAULT_VALUE"
+		,PFID -> XORD[PFID -> XCNT] -> EXAMFORMID     = EPPFRFID
+		,PFID -> XORD[PFID -> XCNT] -> RELINKFLAG     = C.SEQACTION
+		,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+		,PFID -> XORD[PFID -> XCNT] -> PERSONID       = C.PERSON_ID
+		,PFID -> XORD[PFID -> XCNT] -> ORDERLOC       = C.ORDER_LOC
+		,PFID -> XORD[PFID -> XCNT] -> CT_MOD_CD      = C.CT_MOD_CD
+		,PFID -> XORD[PFID -> XCNT] -> CATALOG_CD     = C.CATALOG_CD
+		,PFID -> XORD[PFID -> XCNT] -> SCH_EVTID      = C.SCH_CE_EVT_ID
+	WITH NOCOUNTER
+ 
+	SELECT
+		XID       = PFID->XORD[D1.SEQ].ITEMID
+	FROM
+		CUST_OPRDWL_RADORD C
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+	PLAN D1
+		WHERE PFID-> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+	JOIN C
+		WHERE C.CATALOG_CD = PFID-> XORD[D1.SEQ] -> CATALOG_CD
+		  AND C.ACTIVE_IND = 1
+	DETAIL
+		PFID-> XORD[XID] -> SUBTYPE_CD = C.SUBTYPE_CD
+	WITH NOCOUNTER
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDLKORDSPC (LINKEDORDER)
+ 
+;    SELECT INTO "nl:"
+;    FROM
+;      CUST_OPRDWL_ORD C
+;
+;    WHERE C.ORDER_ID = LINKEDORDER
+;      AND C.ACTIVE_IND = 1
+;    DETAIL
+;      PFID -> XCNT = PFID ->XCNT  + 1
+;      ,STAT = ALTERLIST ( PFID -> XORD ,  PFID -> XCNT )
+;      ,PFID -> XORD[PFID -> XCNT] -> ITEMID         = PFID -> XCNT
+;      ,PFID -> XORD[PFID -> XCNT] -> ORDERID        = C.ORDER_ID
+;      ,PFID -> XORD[PFID -> XCNT] -> ORDERID_DESC   = CONCAT(TRIM(CNVTSTRING(C.ORDER_ID)),":",C.ORDER_MNEMONIC)
+;      ,PFID -> XORD[PFID -> XCNT] -> ORDERDESC      = C.ORDER_MNEMONIC
+;      ,PFID -> XORD[PFID -> XCNT] -> ORIGENCTRID    = C.ENCNTR_ID
+;  		,PFID -> XORD[PFID -> XCNT] -> ENCTR_ID		   = C.ENCNTR_ID
+;      ,PFID -> XORD[PFID -> XCNT] -> PF_CE_EVTID    = C.PF_CE_EVT_ID
+;      ,PFID -> XORD[PFID -> XCNT] -> EP_CE_EVTID    = C.EP_CE_EVT_ID
+;      ,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+;      ,PFID -> XORD[PFID -> XCNT] -> ORDERDTTM      = C.ORDER_DT_TM
+;      ,PFID -> XORD[PFID -> XCNT] -> DATEORDER      = FORMAT(C.ORDER_DT_TM,"MM-DD-YYYY HH:MM;;Q")
+;      ,PFID -> XORD[PFID -> XCNT] -> MODIFYFLAG     = "No"
+;      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATUS = "Initalized"
+;      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATLVL= 1
+;      ,PFID -> XORD[PFID -> XCNT] -> MODTYPE        = C.mod_type
+;      ,PFID -> XORD[PFID -> XCNT] -> EPREORDERCHGS  = "DEFAULT_VALUE"
+;      ,PFID -> XORD[PFID -> XCNT] -> EXAMFORMID     = EPPFRFID
+;      ,PFID -> XORD[PFID -> XCNT] -> RELINKFLAG     = C.SEQACTION
+;		  ,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.pform_id
+;		  ,PFID -> XORD[PFID -> XCNT] -> PERSONID       = C.person_id
+;		  ,PFID -> XORD[PFID -> XCNT] -> ORDERLOC       = C.order_loc
+; 		  ,PFID -> XORD[PFID -> XCNT] -> CT_MOD_CD	     = C.ct_mod_cd
+;  		,PFID -> XORD[PFID -> XCNT] -> CATALOG_CD      = C.CATALOG_CD
+;  		,PFID -> XORD[PFID -> XCNT] -> GROUP_PFID      = C.GRP_PF_ID
+;  		,PFID -> XORD[PFID -> XCNT] -> SCH_EVTID       = C.SCH_CE_EVT_ID
+;     WITH NOCOUNTER
+ 
+ 
+    SELECT INTO "nl:"
+    FROM CUST_OPRDWL_ORD C
+ 
+    WHERE C.ORDER_ID = LINKEDORDER
+        AND C.ACTIVE_IND = 1
+    DETAIL
+      PFID -> XCNT = PFID ->XCNT  + 1
+      ,STAT = ALTERLIST ( PFID -> XORD ,  PFID -> XCNT )
+      ,PFID -> XORD[PFID -> XCNT] -> ITEMID         = PFID -> XCNT
+  	  ,PFID -> XORD[PFID -> XCNT] -> ACTIVEIND      = C.ACTIVE_IND
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERID        = C.ORDER_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERID_DESC   = CONCAT(TRIM(CNVTSTRING(C.ORDER_ID)),":",C.ORDER_MNEMONIC)
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERDESC      = C.ORDER_MNEMONIC
+      ,PFID -> XORD[PFID -> XCNT] -> ORIGENCTRID    = C.ENCNTR_ID
+  	  ,PFID -> XORD[PFID -> XCNT] -> ENCTR_ID	    = C.ENCNTR_ID
+      ,PFID -> XORD[PFID -> XCNT] -> PF_CE_EVTID    = C.PF_CE_EVT_ID
+      ,PFID -> XORD[PFID -> XCNT] -> EP_CE_EVTID    = C.EP_CE_EVT_ID
+      ,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERDTTM      = C.ORDER_DT_TM
+      ,PFID -> XORD[PFID -> XCNT] -> DATEORDER      = FORMAT(C.ORDER_DT_TM,"MM-DD-YYYY HH:MM;;Q")
+      ,PFID -> XORD[PFID -> XCNT] -> MODIFYFLAG     = "No"
+      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATUS = "Initalized"
+      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATLVL= 1
+      ,PFID -> XORD[PFID -> XCNT] -> MODTYPE        = C.MOD_TYPE
+      ,PFID -> XORD[PFID -> XCNT] -> EPREORDERCHGS  = "DEFAULT_VALUE"
+      ,PFID -> XORD[PFID -> XCNT] -> EXAMFORMID     = EPPFRFID
+      ,PFID -> XORD[PFID -> XCNT] -> RELINKFLAG     = C.SEQACTION
+      ,PFID -> XORD[PFID -> XCNT] -> PFORMID        = C.PFORM_ID
+      ,PFID -> XORD[PFID -> XCNT] -> PERSONID       = C.PERSON_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERLOC       = C.ORDER_LOC
+ 	  ,PFID -> XORD[PFID -> XCNT] -> CT_MOD_CD	    = C.CT_MOD_CD
+ 	  ,PFID -> XORD[PFID -> XCNT] -> CATALOG_CD     = C.CATALOG_CD
+ 	  ,PFID -> XORD[PFID -> XCNT] -> GROUP_PFID     = C.GRP_PF_ID
+  	  ,PFID -> XORD[PFID -> XCNT] -> SCH_EVTID      = C.SCH_CE_EVT_ID
+      ,PFID -> XORD[PFID -> XCNT] -> ORDSTATE_CD    = C.ORDERSTATE_CD
+    WITH NOCOUNTER
+ 
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLFODAT (NULL)
+ 
+DECLARE ENCID = F8
+DECLARE ORDIDX = I4
+DECLARE OCFCOMP 	= F8 WITH CONSTANT(UAR_GET_CODE_BY("MEANING",120,"OCFCOMP")),PROTECT
+DECLARE BLBOUT  	= VC WITH PUBLIC
+DECLARE BLBNORTF 	= VC WITH PUBLIC
+DECLARE BSIZE   	= I4 WITH PUBLIC
+ 
+    SELECT INTO "nl:"
+        XID       = PFID->XORD[D1.SEQ].ITEMID
+        FROM
+            ORDER_DETAIL   OD
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+            PLAN D1
+                WHERE PFID -> XORD[D1.seq] ->EXCLUD_FLAG = 0
+            JOIN OD
+            WHERE OD.order_id =  PFID -> XORD[D1.seq] -> ORDERID
+                AND OD.OE_FIELD_ID IN (
+                      12594.00,
+                      12623.00,
+                     731472.00,
+                     990456.00,
+                   76951547.00,
+                  387761448.00,
+                  581257913.00
+                    )
+     ORDER BY
+            OD.ORDER_ID
+            , OD.OE_FIELD_ID
+            , OD.ACTION_SEQUENCE   DESC
+            , OD.DETAIL_SEQUENCE
+ 
+     HEAD  OD.OE_FIELD_ID
+            IF (OD.OE_FIELD_ID = 731472.00)
+                PFID -> XORD[XID]-> ORDERPRIORITY = OD.OE_FIELD_DISPLAY_VALUE
+            ELSEIF (OD.OE_FIELD_ID = 12615.00)
+                PFID -> XORD[XID]-> ORDERLOC = OD.OE_FIELD_DISPLAY_VALUE
+            ELSEIF (OD.OE_FIELD_ID = 387761448.00)
+                PFID -> XORD[XID] -> RADDISCRETION = BUILD(OD.OE_FIELD_DISPLAY_VALUE)
+            ELSEIF (OD.OE_FIELD_ID = 76951547.00)
+                PFID -> XORD[XID]-> SEDATIONTYPE = BUILD(OD.OE_FIELD_DISPLAY_VALUE)
+            ELSEIF (OD.OE_FIELD_ID = 12623.00)
+                PFID -> XORD[XID]-> PREGNANT = OD.OE_FIELD_DISPLAY_VALUE
+            ELSEIF (OD.OE_FIELD_ID = 990456.00)
+                PFID -> XORD[XID]-> CLININFO = OD.OE_FIELD_DISPLAY_VALUE
+            ELSEIF (OD.OE_FIELD_ID = 581257913.00)
+                PFID -> XORD[XID]-> ORIGORDDT = OD.OE_FIELD_DISPLAY_VALUE
+            ENDIF
+ 
+   	HEAD   OD.DETAIL_SEQUENCE
+             IF (OD.OE_FIELD_ID = 12594.00)
+                PFID -> XORD[XID]-> ODDIAGNOSIS =
+                		BUILD( OD.OE_FIELD_DISPLAY_VALUE,"|",trim(PFID -> XORD[XID]->ODDIAGNOSIS))
+ 			 ENDIF
+    WITH orahintcbo("index(od XPKORDER_DETAIL$C)"),   NOCOUNTER, TIME = 31
+ 
+    SELECT INTO "nl:"
+        XID       = PFID->XORD[D1.SEQ].ITEMID
+    FROM
+        CLINICAL_EVENT   CE
+        , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+    PLAN D1
+    JOIN CE
+        WHERE CE.ENCNTR_ID          = PFID -> XORD[D1.SEQ] -> ORIGENCTRID
+          AND CE.PARENT_EVENT_ID    = PFID -> XORD[D1.SEQ] -> PF_CE_EVTID
+          AND CE.EVENT_CD           = 11895.00
+          AND (CE.VALID_UNTIL_DT_TM = CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+     DETAIL
+         IF (CE.EVENT_TITLE_TEXT = "Worklist Comments")
+            PFID -> XORD[XID] -> CMT_CE_EVTID = CE.EVENT_ID
+         ELSEIF (CE.EVENT_TITLE_TEXT = "Exam Protocol*")
+             PFID -> XORD[XID]-> PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+         ENDIF
+     WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME = 60
+ 
+    SELECT INTO  "nl:"
+        C.EVENT_ID,
+        C.COMPRESSION_CD,
+        C.BLOB_LENGTH,
+        C.BLOB_CONTENTS,
+        CE.EVENT_CD,
+        XID = PFID->XORD[D1.SEQ].ITEMID
+    FROM
+     CLINICAL_EVENT CE
+        , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+    PLAN D1
+        WHERE PFID -> XORD[D1.SEQ]-> ORIGENCTRID > 0
+    	  AND PFID -> XORD[D1.SEQ]-> EXCLUD_FLAG = 0
+          AND PFID -> XORD[D1.SEQ]-> CMT_CE_EVTID > 0
+ 
+    JOIN CE
+        WHERE  CE.PARENT_EVENT_ID = PFID -> XORD[D1.SEQ]-> CMT_CE_EVTID
+        AND (CE.VALID_UNTIL_DT_TM= CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+ 
+    DETAIL
+    	PFID -> XORD[XID]-> RDCMTEVTID = CE.EVENT_ID
+	WITH NOCOUNTER,  TIME = 23
+ 
+ 
+	SELECT INTO  "nl:"
+        XID       = PFID->XORD[D1.SEQ].ITEMID
+    FROM
+         CE_BLOB C
+        , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+    PLAN D1
+        WHERE PFID -> XORD[D1.SEQ]->  RDCMTEVTID > 0
+ 
+    JOIN C
+        WHERE C.EVENT_ID =  PFID -> XORD[D1.SEQ]->  RDCMTEVTID
+        AND (C.VALID_UNTIL_DT_TM    = CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+    ORDER BY
+        C.VALID_UNTIL_DT_TM DESC
+ 
+    DETAIL
+        BLBOUT = NOTRIM(FILLSTRING(32768," "))
+        BLBNORTF = NOTRIM(FILLSTRING(32768," "))
+ 
+        IF(C.COMPRESSION_CD = OCFCOMP)
+                         UNCOMPSIZE = 0
+                         BLB_UN  = UAR_OCF_UNCOMPRESS (C.BLOB_CONTENTS, C.BLOB_LENGTH,
+                                       BLBOUT, SIZE( BLBOUT ), UNCOMPSIZE)
+ 
+                         STAT = UAR_RTF2(BLBOUT,UNCOMPSIZE, BLBNORTF,SIZE(BLBNORTF),BSIZE,0)
+                         BLBNORTF = SUBSTRING(1,BSIZE,BLBNORTF)
+        ELSE
+            BLBNORTF = C.BLOB_CONTENTS
+        ENDIF,
+        PFID -> XORD[XID]-> RADCOMMENTS =  BLBNORTF
+    WITH NOCOUNTER,  TIME = 23
+ 
+    SELECT INTO  "nl:"
+        XID       = PFID->XORD[D1.SEQ].ITEMID
+    FROM
+  		ORDER_COMMENT   O
+		, LONG_TEXT   L
+        , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+    PLAN D1
+        WHERE PFID -> XORD[D1.SEQ]-> EXCLUD_FLAG = 0
+ 	JOIN O
+	WHERE O.ORDER_ID = PFID -> XORD[D1.SEQ]->ORDERID
+	AND O.COMMENT_TYPE_CD = 66.00
+	JOIN L
+	WHERE L.LONG_TEXT_ID = O.LONG_TEXT_ID
+ 
+    DETAIL
+    	PFID -> XORD[XID]-> ORDERCMTS =
+          CONCAT ( TRIM(PFID -> XORD[XID]-> ORDERCMTS), L.LONG_TEXT,"|")
+ 
+    WITH orahintcbo("index(ce XIE28CLINICAL_EVENT)"), NOCOUNTER,  TIME = 23
+ 
+    FOR ( ORDIDX = 1 TO PFID -> XCNT )
+        SET ENCID = 0
+        IF (PFID -> XORD[ORDIDX] ->EXCLUD_FLAG = 0 )
+            SET ENCID = PFID -> XORD[ORDIDX]-> ORIGENCTRID
+            IF (ENCID > 0)
+                IF ( PFID -> XORD[ORDIDX] -> EP_CE_EVTID > 0)
+                        CALL SRPF (PFID -> XORD[ORDIDX] -> EP_CE_EVTID,
+                            PFID -> XORD[ORDIDX]-> ORIGENCTRID,  ORDIDX)
+                ENDIF
+            ENDIF
+        ENDIF
+    ENDFOR
+ 
+    IF (PFID ->XCNT > 0 )
+       SELECT
+            O.ORDER_ID
+            , O.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+            , P.PERSON_ID
+            , P.BIRTH_DT_TM
+ 
+        FROM
+            ORDERS   O
+            , ORDER_ACTION OA
+            , PERSON   P
+            , PERSON_ALIAS PA
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE PFID -> XORD[D1.SEQ]-> EXCLUD_FLAG = 0
+        JOIN O
+            WHERE O.ORDER_ID = PFID->XORD[D1.SEQ].ORDERID
+        JOIN OA
+            WHERE OA.ORDER_ID = O.ORDER_ID
+              AND OA.ACTION_TYPE_CD =     2534.00
+        JOIN P
+            WHERE P.PERSON_ID = O.PERSON_ID
+        JOIN PA
+            WHERE PA.PERSON_ID = OUTERJOIN(P.PERSON_ID)
+               AND PA.ALIAS_POOL_CD = OUTERJOIN(668987.00)
+ 
+        DETAIL
+ 
+             PFID -> XORD[XID]->NAME_FULL_FMT = P.NAME_FULL_FORMATTED
+            ,PFID -> XORD[XID]->PERSONID = O.PERSON_ID
+            ,PFID -> XORD[XID]->DOB = format(p.birth_dt_tm, "MM/DD/YYYY")
+            ,PFID -> XORD[XID]->AGE = CNVTAGE(p.birth_dt_tm)
+            ,PFID -> XORD[XID] -> ORDERPROVIDER   = OA.order_provider_id
+            ,PFID -> XORD[XID] -> MRN             = PA.ALIAS
+ 
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND  PFID -> XORD[D1.SEQ]-> EXCLUD_FLAG = 0
+        JOIN P WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].ORDERPROVIDER
+ 
+        DETAIL
+             PFID -> XORD[XID]->ORDERPROVIDERNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND PFID -> XORD[D1.SEQ]-> EXCLUD_FLAG = 0
+               AND PFID->XORD[D1.SEQ].EPHOLDSTATUSID > 0
+        JOIN P
+              WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].EPHOLDSTATUSID
+ 
+        DETAIL
+             PFID -> XORD[XID]->EPHOLDSTATNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , XORDER_EP2HOLD =PFID->XORD[D1.SEQ].EP2HOLDSTATUSID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND PFID -> XORD[D1.SEQ].EXCLUD_FLAG = 0
+               AND PFID->XORD[D1.SEQ].EP2HOLDSTATUSID > 0
+        JOIN P
+            WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].EP2HOLDSTATUSID
+ 
+        DETAIL
+             PFID -> XORD[XID]->EP2HOLDSTATNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND PFID -> XORD[D1.SEQ].EXCLUD_FLAG = 0
+        JOIN P
+               WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].EPHOLDSPECPROTOCOLID
+ 
+        DETAIL
+             PFID -> XORD[XID]->EPHOLDSPECPROTOCOLNM = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND PFID -> XORD[D1.SEQ].EXCLUD_FLAG = 0
+        JOIN P
+               WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].NPHOLDSTATUSID
+ 
+        DETAIL
+             PFID -> XORD[XID]->NPHOLDSTATNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND PFID -> XORD[D1.SEQ].EXCLUD_FLAG = 0
+        JOIN P
+              WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].NPMODIFYCMTID
+ 
+        DETAIL
+             PFID -> XORD[XID]->NPMODIFYCMTNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND PFID -> XORD[D1.SEQ].EXCLUD_FLAG = 0
+               AND PFID->XORD[D1.SEQ].NPCLRID> 0
+        JOIN P
+                WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].NPCLRID
+ 
+        DETAIL
+             PFID -> XORD[XID]->NPCLRNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+               WHERE PFID->XORD[D1.SEQ].ORIGENCTRID > 0
+               AND PFID -> XORD[D1.SEQ].EXCLUD_FLAG = 0
+        JOIN P
+              WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].RADIOLOGID
+ 
+        DETAIL
+             PFID -> XORD[XID]->RADIOLOGISTNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+    ENDIF
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDRCDAT (NULL)
+ 
+DECLARE OCFCOMP 	= F8 WITH CONSTANT(UAR_GET_CODE_BY("MEANING",120,"OCFCOMP")),PROTECT
+DECLARE BLBOUT     	= VC WITH PUBLIC
+DECLARE BLBNORTF   	= VC WITH PUBLIC
+DECLARE BLBMATCH 	= VC
+DECLARE BLBFOUND 	= I4
+DECLARE BSIZE       = W8 WITH PUBLIC
+DECLARE EITEMS_IDX 	= I4
+ 
+RECORD FINDBLB (
+  1 ECNT 				= I2
+  1 EITEMS [*]
+    2  BLBEVTID 		= F8
+    2  TABSECTION_ID 	= F8
+    2  PROTDATEMODIFIED = VC
+  )
+ 
+	SET BLBFOUND = 0
+    SELECT INTO "nl:"
+        XID  = PFID->XORD[D1.SEQ].ITEMID
+    FROM
+		ORDER_DETAIL   OD
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+	PLAN D1
+		WHERE PFID-> XORD[D1.seq]->EXCLUD_FLAG = 0
+	JOIN OD
+		WHERE OD.order_id =  PFID-> XORD[D1.seq]-> ORDERID
+		  AND OD.OE_FIELD_ID IN (
+			12615.00,
+			581257913.00
+		)
+    ORDER BY
+            OD.ORDER_ID
+            , OD.OE_FIELD_ID
+            , OD.ACTION_SEQUENCE   DESC
+            , OD.DETAIL_SEQUENCE
+ 
+    HEAD  OD.OE_FIELD_ID
+		IF (OD.OE_FIELD_ID = 12615.00)
+			PFID-> XORD[XID]-> ORDERLOC = OD.OE_FIELD_DISPLAY_VALUE
+		ELSEIF (OD.OE_FIELD_ID = 581257913.00)
+			PFID-> XORD[XID]-> ORIGORDDT = OD.OE_FIELD_DISPLAY_VALUE
+		ENDIF
+    WITH orahintcbo("index(od XPKORDER_DETAIL$C)"),   NOCOUNTER, TIME = 31
+ 
+	SELECT
+		XID = D1.SEQ
+	FROM
+		CLINICAL_EVENT   CE
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+	PLAN D1
+		WHERE PFID-> XORD[D1.SEQ]-> ORIGENCTRID > 0
+		  AND PFID-> XORD[D1.SEQ]-> EXCLUD_FLAG = 0
+ 
+	JOIN CE
+		WHERE  CE.ENCNTR_ID 		= PFID-> XORD[D1.SEQ]-> ORIGENCTRID
+		  AND  CE.EVENT_CD 			= 1549050995.00
+		  AND  CE.EVENT_TAG 		= "Radiology Order ID"
+		  AND (CE.VALID_UNTIL_DT_TM	= CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+		  AND  CE.event_end_dt_tm >CNVTLOOKBEHIND("1,D")
+	ORDER
+		CE.EVENT_END_DT_TM  DESC
+ 
+	DETAIL
+		FINDBLB->ECNT = FINDBLB->ECNT + 1
+		,STAT = ALTERLIST(FINDBLB->EITEMS,FINDBLB->ECNT)
+		,FINDBLB->EITEMS[FINDBLB->ECNT]->BLBEVTID  = CE.EVENT_ID
+		,FINDBLB->EITEMS[FINDBLB->ECNT]->TABSECTION_ID = CE.PARENT_EVENT_ID
+		,FINDBLB->EITEMS[FINDBLB->ECNT]->PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+	WITH orahintcbo("index(ce XIE28CLINICAL_EVENT)"), NOCOUNTER,  TIME = 23
+ 
+	IF (FINDBLB->ECNT > 0 )
+		CALL ECHO(BUILD("BLOB PROCESSING: ",FINDBLB->ECNT ))
+		SET BLBMATCH = TRIM(PFID-> XORD[1]->ORDERID_DESC)
+		CALL ECHO(BUILD("BLOB Match value: :", BLBMATCH ))
+		FOR (EITEMS_IDX = 1 TO FINDBLB->ECNT )
+		call echo( build("BLBEVTID: :", FINDBLB->EITEMS[EITEMS_IDX]->BLBEVTID))
+ 
+			SELECT
+			FROM
+				CE_BLOB   C
+			WHERE  C.EVENT_ID =  FINDBLB->EITEMS[EITEMS_IDX]->BLBEVTID
+			  AND (C.VALID_UNTIL_DT_TM    = CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+			  ;AND C.UPDT_DT_TM > CNVTLOOKBEHIND("1,D")
+			ORDER BY
+			  C.VALID_UNTIL_DT_TM DESC
+ 
+			DETAIL
+				BLBOUT = NOTRIM(FILLSTRING(32768," "))
+				BLBNORTF = NOTRIM(FILLSTRING(32768," "))
+ 
+				IF(C.COMPRESSION_CD = OCFCOMP)
+					UNCOMPSIZE = 0
+					BLB_UN  = UAR_OCF_UNCOMPRESS (C.BLOB_CONTENTS, C.BLOB_LENGTH,
+						 BLBOUT, SIZE( BLBOUT ), UNCOMPSIZE)
+ 
+					STAT = UAR_RTF2(BLBOUT,UNCOMPSIZE, BLBNORTF,SIZE(BLBNORTF),BSIZE,0)
+					BLBNORTF = TRIM(SUBSTRING(1,BSIZE,BLBNORTF))
+				call Echo(build ("BLOB: :", BLBNORTF))
+				ELSE
+					BLBNORTF = C.BLOB_CONTENTS
+				ENDIF,
+				IF ( FINDSTRING(BLBMATCH,BLBNORTF,1,0) > 0)
+					call echo ("FOUND BLOB")
+					PFID-> XORD[1]-> ORDIDBLB 		  = BLBNORTF
+					PFID-> XORD[1]-> BLBEVTID 		  = FINDBLB->EITEMS[EITEMS_IDX]->BLBEVTID
+					PFID-> XORD[1]-> TABSECTION_ID 	  = FINDBLB->EITEMS[EITEMS_IDX]->TABSECTION_ID
+					PFID-> XORD[1]-> PROTDATEMODIFIED = FINDBLB->EITEMS[EITEMS_IDX]->PROTDATEMODIFIED
+				ENDIF
+			WITH NOCOUNTER,  TIME = 23
+		ENDFOR
+ 
+		IF ( PFID-> XORD[1]-> ORDIDBLB !="" )
+			SET PFID-> XORD[1]-> PROTOCOLSTATUS	 = "Initalized"
+			SET PFID-> XORD[1]-> PROTOCOLSTATLVL = 1
+			SET PFID-> XORD[1]-> MODIFYFLAG 	 ="MODIFY"
+		ELSE
+			SET PFID-> XORD[1]-> TABSECTION_ID = 0
+		ENDIF
+ 
+	ELSE
+		SELECT INTO "nl:"
+			CE.event_cd
+			,XID = PFID->XORD[D1.SEQ].ITEMID
+		FROM
+			CLINICAL_EVENT  CE
+			, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+		PLAN D1
+			WHERE PFID-> XORD[D1.SEQ]-> ORIGENCTRID > 0
+			  AND PFID-> XORD[D1.SEQ]-> EXCLUD_FLAG = 0
+			  AND PFID-> XORD[D1.SEQ]-> RELINKFLAG != "RELINK"
+		JOIN CE
+			WHERE CE.ENCNTR_ID = PFID-> XORD[D1.SEQ]-> ORIGENCTRID
+ 			  AND CE.EVENT_CD = 1549050995.00
+			  ;AND CE.EVENT_END_DT_TM > CNVTLOOKBEHIND("2,D") ;### NEW FEATURE ####
+			  AND CE.VALID_UNTIL_DT_TM  = CNVTDATETIME("31-DEC-2100 00:00:00")
+			  AND CE.EVENT_TAG = PATSTRING($SDATE)
+			  AND CE.PUBLISH_FLAG =1
+			  AND CE.RESULT_STATUS_CD IN (
+					ATHRSLTSTCD,
+					ALTRSLSTCD,
+					MODRSLSTCD); (35,25,34)
+			  AND CE.EVENT_TAG!="Date\Time Correction"
+ 
+		DETAIL
+           PFID-> XORD[XID]-> TABSECTION_ID 	= CE.PARENT_EVENT_ID
+          ,PFID-> XORD[XID]-> PROTOCOLSTATUS 	= "Initalized"
+          ,PFID-> XORD[XID]-> PROTOCOLSTATLVL 	= 1
+          ,PFID-> XORD[XID]-> MODIFYFLAG 		="MODIFY"
+          ,PFID-> XORD[XID]-> PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+		WITH NOCOUNTER,  TIME = 19
+	ENDIF
+ 
+	SELECT INTO "nl:"
+		XID = PFID->XORD[D1.SEQ].ITEMID
+	FROM
+		CLINICAL_EVENT CE
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+	PLAN D1
+		WHERE PFID-> XORD[D1.SEQ]-> ORIGENCTRID   > 0
+		  AND PFID-> XORD[D1.SEQ]-> EXCLUD_FLAG   = 0
+		  AND PFID-> XORD[D1.SEQ]-> TABSECTION_ID > 0
+		  AND PFID-> XORD[D1.SEQ]-> PF_CE_EVTID   = 0
+ 
+	JOIN CE
+		WHERE CE.ENCNTR_ID  = PFID-> XORD[D1.SEQ]-> ORIGENCTRID
+		  AND CE.event_id   = PFID-> XORD[D1.SEQ]-> TABSECTION_ID
+		  AND CE.VALID_UNTIL_DT_TM = CNVTDATETIME("31-DEC-2100 00:00:00")
+ 
+	DETAIL
+		PFID-> XORD[XID]-> PF_CE_EVTID =  CE.PARENT_EVENT_ID
+ 
+	WITH orahintcbo("index(ce XAK2CLINICAL_EVENT)"), NOCOUNTER,  TIME = 2
+ 
+    SELECT INTO "nl:"
+        XID        = PFID->XORD[D1.SEQ].ITEMID
+    FROM
+        CLINICAL_EVENT   CE
+        , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+    PLAN D1
+        WHERE PFID-> XORD[D1.SEQ]-> ORIGENCTRID   > 0
+          AND PFID-> XORD[D1.SEQ]-> EXCLUD_FLAG   = 0
+          AND PFID-> XORD[D1.SEQ]-> TABSECTION_ID > 0
+ 
+    JOIN CE
+        WHERE CE.PARENT_EVENT_ID    = PFID-> XORD[D1.SEQ]-> PF_CE_EVTID
+          AND CE.EVENT_CD 			= 11895.00
+          AND (CE.VALID_UNTIL_DT_TM = CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+     DETAIL
+         IF (CE.EVENT_TITLE_TEXT = "Worklist Comments")
+            PFID-> XORD[XID]-> CMT_CE_EVTID = CE.EVENT_ID
+         ELSEIF (CE.EVENT_TITLE_TEXT = "Exam Protocol - Outpatient");  "Exam Protocol")
+            PFID-> XORD[XID]-> EP_CE_EVTID = CE.EVENT_ID
+            call echo(build("EP_CE_EVTID:1 :",": :" ,CE.EVENT_ID ))
+         ELSEIF (CE.EVENT_TITLE_TEXT = "IR Exam Protocol")
+            PFID-> XORD[XID]-> EP_CE_EVTID = CE.EVENT_ID
+         ENDIF
+     WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME = 60
+ 
+    call echo(build("EP_CE_EVTID:2 :", PFID-> XORD[1].EP_CE_EVTID))
+ 
+    SELECT INTO "nl:"
+        XID        = PFID->XORD[D1.SEQ].ITEMID
+    FROM
+        DCP_FORMS_ACTIVITY_COMP  DC
+        , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+    PLAN D1
+        WHERE PFID-> XORD[D1.SEQ]-> ORIGENCTRID   > 0
+          AND PFID-> XORD[D1.SEQ]-> EXCLUD_FLAG   = 0
+          AND PFID-> XORD[D1.SEQ]-> TABSECTION_ID > 0
+          AND PFID-> XORD[D1.SEQ]-> PF_CE_EVTID   > 0
+          AND PFID-> XORD[D1.SEQ]-> PFORMID       = 0
+    JOIN DC
+        WHERE DC.PARENT_ENTITY_ID =  PFID-> XORD[D1.SEQ]-> PF_CE_EVTID
+          AND DC.COMPONENT_CD 	  =  10891.00
+ 
+    DETAIL
+        PFID-> XORD[XID]-> PFORMID  = DC.DCP_FORMS_ACTIVITY_ID
+ 
+    WITH orahintcbo("index(dc XIE1DCP_FORMS_ACTIVITY_COMP)"), NOCOUNTER,  TIME = 11
+	FREE RECORD FINDBLB
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLFODAT2 (NULL)
+ 
+DECLARE PARENT_PF_ID = F8
+DECLARE TABSECTION_ID = F8
+DECLARE SCHTAB_ID = F8
+DECLARE EXMPRTCL_ID = F8
+DECLARE RADCMTTAB_ID = F8
+DECLARE ENCID = F8
+DECLARE VORDERID = F8
+DECLARE ORDIDX = I4
+ 
+    FOR ( ORDIDX = 1 TO PFID -> XCNT )
+        SET RADCMTTAB_ID = 0
+        SET TABSECTION_ID = 0
+        SET SCHTAB_ID = 0
+        SET EXMPRTCL_ID = 0
+        SET ENCID = 0
+        SET VORDERID = 0
+        SET PARENT_PF_ID = 0
+        IF ( PFID -> XORD[ORDIDX] ->EXCLUD_FLAG = 0 )
+            SELECT INTO "nl:"
+            FROM
+                ORDER_DETAIL   OD
+ 
+            WHERE OD.order_id =  PFID -> XORD[ORDIDX] -> ORDERID
+                    AND OD.OE_FIELD_ID IN (
+                          12594.00,
+                          12615.00,
+                          12620.00,
+                          12623.00,
+                          12651.00,
+                          12731.00,
+                         731472.00,
+                         990456.00,
+                       76951547.00,
+                      387761448.00,
+                      581257913.00,
+                     1162074453.00
+                        )
+            ORDER BY
+                OD.ORDER_ID
+                , OD.OE_FIELD_ID
+                , OD.ACTION_SEQUENCE   DESC
+                , OD.DETAIL_SEQUENCE
+ 
+            HEAD  OD.OE_FIELD_ID
+                IF (OD.OE_FIELD_ID =  1162074453.00 )
+                    PFID -> XORD[ORDIDX]->ENCTR_ID = CNVTREAL(OD.OE_FIELD_DISPLAY_VALUE)
+                ELSEIF (OD.OE_FIELD_ID = 731472.00)
+                    PFID -> XORD[ORDIDX]-> ORDERPRIORITY = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 12615.00)
+                    PFID -> XORD[ORDIDX]-> ORDERLOC = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 12620.00)
+                    PFID -> XORD[ORDIDX] -> XREQSTARTDTTM = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 12731.00)
+                    PFID -> XORD[ORDIDX]-> XSTOPDTTM = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 69217977.00)
+                    PFID -> XORD[ORDIDX]-> XEXPIREDTTM = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 387761448.00)
+                    PFID -> XORD[ORDIDX] -> RADDISCRETION = BUILD(OD.OE_FIELD_DISPLAY_VALUE)
+                ELSEIF (OD.OE_FIELD_ID = 76951547.00)
+                    PFID -> XORD[ORDIDX]-> SEDATIONTYPE = BUILD(OD.OE_FIELD_DISPLAY_VALUE)
+                ELSEIF (OD.OE_FIELD_ID = 12623.00)
+                    PFID -> XORD[ORDIDX]-> PREGNANT = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 990456.00)
+                    PFID -> XORD[ORDIDX]-> CLININFO = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 581257913.00)
+                    PFID -> XORD[ORDIDX]-> ORIGORDDT = OD.OE_FIELD_DISPLAY_VALUE
+                ELSEIF (OD.OE_FIELD_ID = 12651.00)
+                    PFID -> XORD[ORDIDX]-> FUTUREORD = OD.OE_FIELD_DISPLAY_VALUE
+                ENDIF
+ 
+			HEAD	 OD.DETAIL_SEQUENCE
+	            IF (OD.OE_FIELD_ID = 12594.00)
+	                PFID -> XORD[ORDIDX]-> ODDIAGNOSIS =
+	                		BUILD( OD.OE_FIELD_DISPLAY_VALUE,"|",trim(PFID -> XORD[ORDIDX]->ODDIAGNOSIS))
+	            ENDIF
+            WITH orahintcbo("index(od XPKORDER_DETAIL$C)"),   NOCOUNTER, TIME = 31
+ 
+            IF (PFID -> XORD[ORDIDX]->ENCTR_ID > 10)
+                SET PFID -> XORD[ORDIDX]-> ORIGENCTRID = PFID -> XORD[ORDIDX]->ENCTR_ID
+            ENDIF
+            SET ENCID = PFID -> XORD[ORDIDX]-> ORIGENCTRID
+                SELECT INTO "nl:"
+                FROM
+                    ORDERS   ORD
+                    , ORDER_CATALOG   ORC
+ 
+                    PLAN ORD
+                        WHERE ORD.ORDER_ID = VORDERID
+                            AND ORD.ACTIVITY_TYPE_CD IN (711.00)
+                            AND ORD.ORDER_STATUS_CD = 2546.00
+                            AND ORD.NEED_DOCTOR_COSIGN_IND = 0
+                            AND ORD.NEED_PHYSICIAN_VALIDATE_IND = 0
+                            AND ORD.TEMPLATE_ORDER_FLAG  IN (0 ,1 )
+                            AND ORD.ORIG_ORD_AS_FLAG = 0
+                            AND ORD.ACTIVE_IND = 1
+                        JOIN ORC
+                          WHERE ORC.CATALOG_CD = ORD.CATALOG_CD
+                            AND ORC.ACTIVITY_SUBTYPE_CD IN (
+                                633747.00,
+                                633750.00,
+                                633751.00,
+                                110440686.00
+                                )
+ 
+                 DETAIL
+                      PFID -> XORD[ORDIDX] -> PERSONID       = ORD.PERSON_ID
+                      PFID -> XORD[ORDIDX] -> DATEORDER      = FORMAT(ORD.orig_order_dt_tm,"MM/DD/YYYY HH:MM")
+                      PFID -> XORD[ORDIDX] -> ORDERDTTM      = ORD.orig_order_dt_tm
+                      PFID -> XORD[ORDIDX] -> ORDSTATUS      = UAR_GET_CODE_DISPLAY(ORD.ORDER_STATUS_CD)
+                      PFID -> XORD[ORDIDX] -> DEPTORDSTATUS  = UAR_GET_CODE_DISPLAY(ORD.dept_status_cd)
+                      PFID -> XORD[ORDIDX] -> CLNDISPLINE    = ORD.clinical_display_line
+                      PFID -> XORD[ORDIDX] -> MODTYPE        = ORC.ACTIVITY_SUBTYPE_CD
+                WITH  NOCOUNTER, TIME=45
+        ENDIF
+    ENDFOR
+    IF (PFID ->XCNT > 0 )
+            SELECT
+            O.ORDER_ID
+            , O.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+            , P.PERSON_ID
+            , P.BIRTH_DT_TM
+ 
+        FROM
+            ORDERS   O
+            , ORDER_ACTION OA
+            , PERSON   P
+            , PERSON_ALIAS PA
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE PFID->XORD[D1.SEQ].EXCLUD_FLAG = 0
+        JOIN O
+            WHERE O.ORDER_ID = PFID->XORD[D1.SEQ].ORDERID
+        JOIN OA
+            WHERE OA.ORDER_ID = O.ORDER_ID
+              AND OA.action_type_cd =     2534.00
+        JOIN P
+            WHERE P.PERSON_ID = O.PERSON_ID
+        JOIN PA
+            WHERE PA.PERSON_ID = OUTERJOIN(P.PERSON_ID)
+              AND PA.alias_pool_cd = OUTERJOIN(668987.00)
+ 
+        DETAIL
+             PFID -> XORD[XID]->NAME_FULL_FMT = P.NAME_FULL_FORMATTED
+            ,PFID -> XORD[XID]->PERSONID = O.PERSON_ID
+            ,PFID -> XORD[XID]->DOB = format(p.birth_dt_tm, "MM/DD/YYYY")
+            ,PFID -> XORD[XID]->AGE = CNVTAGE(p.birth_dt_tm)
+            ,PFID -> XORD[XID] -> ORDERPROVIDER   = OA.order_provider_id
+            ,PFID -> XORD[XID] -> MRN             = PA.ALIAS
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+ 
+        SELECT
+             P.PERSON_ID
+            , XID= PFID->XORD[D1.SEQ].ITEMID
+            , XORD_ORDERID = PFID->XORD[D1.SEQ].ORDERID
+            , P.NAME_FULL_FORMATTED
+ 
+        FROM
+            PRSNL   P
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE PFID->XORD[D1.SEQ].EXCLUD_FLAG = 0
+        JOIN P
+            WHERE P.PERSON_ID = PFID->XORD[D1.SEQ].ORDERPROVIDER
+ 
+        DETAIL
+             PFID -> XORD[XID]->ORDERPROVIDERNAME = P.NAME_FULL_FORMATTED
+        WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME=10
+    ENDIF
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDACTORDS(NULL)
+ 
+        SELECT INTO "nl:"
+FROM
+	ORDERS   O
+	, ORDER_DETAIL   OD
+	, ORDER_ACTION   OA
+	, ORDER_CATALOG   ORC
+	, ORDER_RADIOLOGY   R
+	, ENCOUNTER   E
+	, PERSON   P
+	, CUST_OPRDWL_ORD C
+ 
+Plan O
+            WHERE O.activity_type_cd IN (711.00)
+            AND O.dept_status_cd IN (
+                9317.00
+                ,9328.00
+                ;9316.00
+                ,9320.00
+                ,9324.00
+            )
+            AND O.encntr_id > 0
+            AND NULLVAL (O.HIDE_FLAG, 0 ) = 0
+            AND O.TEMPLATE_ORDER_FLAG  IN (0 ,1 )
+            AND O.ORIG_ORD_AS_FLAG = 0
+        JOIN OD
+      		WHERE OD.ORDER_ID = O.ORDER_ID
+            AND OD.OE_FIELD_ID =  731472.00
+        JOIN E
+          WHERE E.ENCNTR_ID = O.ENCNTR_ID
+            AND E.ENCNTR_TYPE_CD IN (
+			   74763603.00,
+			     309311.00,
+			     669119.00,
+			     669127.00,
+			     771392.00
+            )
+        JOIN OA
+            WHERE OA.ORDER_ID = O.ORDER_ID
+        AND OA.ACTION_DT_TM > CNVTLOOKBEHIND("2,D")
+          AND OA.ACTION_TYPE_CD = 2524.00
+        JOIN ORC
+          WHERE ORC.CATALOG_CD = O.CATALOG_CD
+            AND ORC.ACTIVITY_SUBTYPE_CD IN (
+                633747.00,
+                633748.00,
+                633750.00,
+                633751.00,
+                110440686.00
+                )
+        JOIN P
+            WHERE P.PERSON_ID = E.PERSON_ID
+        JOIN R
+            WHERE R.ORDER_ID = OUTERJOIN(O.ORDER_ID)
+        JOIN C
+            WHERE C.ORDER_ID = OUTERJOIN(O.ORDER_ID)
+              AND C.ACTIVE_IND = OUTERJOIN(1)
+              AND C.SEQACTION_CD = OUTERJOIN(0)
+ 
+    DETAIL
+      RPTDATA -> ORDER_CNT = RPTDATA ->ORDER_CNT  + 1
+      ,STAT = ALTERLIST ( RPTDATA -> ORDERS ,  RPTDATA -> ORDER_CNT )
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ORDERID = O.ORDER_ID
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> PRIORITY = OD.OE_FIELD_DISPLAY_VALUE
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ACCESSIONID = R.accession
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ENCNTRID = O.encntr_id
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> PERSONID = p.person_id
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> CATALOG_CD = c.catalog_cd
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> NAME_FULL_FORMATTED = P.NAME_FULL_FORMATTED
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> DOB = format(p.birth_dt_tm, "MM/DD/YYYY")
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> AGE = CNVTAGE(p.birth_dt_tm)
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> NURSING_UNIT = UAR_GET_CODE_DISPLAY(e.loc_nurse_unit_cd)
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ROOM = UAR_GET_CODE_DISPLAY(e.loc_room_cd)
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> BED = UAR_GET_CODE_DISPLAY(e.loc_bed_cd)
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> DATE_ORDERED = format(o.orig_order_dt_tm,"MM/DD/YY HH:MM")
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> DATE_ORDERED_DQ8 = o.orig_order_dt_tm
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> DATE_REQUESTED = format(R.request_dt_tm,"MM/DD/YY HH:MM")
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ORDER_DESC = UAR_GET_CODE_DISPLAY(o.catalog_cd)
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ORDER_STATUS = UAR_GET_CODE_DISPLAY(O.dept_status_cd)
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> PROTOCAL_STATUS = "Exam Protocol"
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ORDER_CLIN_DISP_LINE = O.clinical_display_line
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ALERT_FLAG = "No"
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> MODTYPE = ORC.ACTIVITY_SUBTYPE_CD
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> MODIFY_FLAG = "ACTIVE"
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> PROTOCOL_DATE_MODIFIED = ""
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> ORGENCNTRID = O.ENCNTR_ID
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> GROUP_PF_ID = C.GRP_PF_ID
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> FORM_ACTIVITY_ID = C.PFORM_ID
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> PID = C.PF_CE_EVT_ID
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> EPID = C.EP_CE_EVT_ID
+      ,RPTDATA -> ORDERS[RPTDATA -> ORDER_CNT] -> EXAM_FORM_ID = EPPFRFID
+    WITH orahintcbo("leading (0) index(o XIE5ORDERS$C) index(c XIE9CLINICAL_EVENT)"), NOCOUNTER , TIME = 30
+ ;SET _Memory_Reply_String = CNVTRECTOJSON(RPTDATA)
+ ; set DEBUG_CTL_FLAG = 1
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDFOSPC(IDORDER)
+ 
+    SELECT INTO "nl:"
+    FROM
+        ORDERS   ORD
+        , ORDER_CATALOG   ORC
+        , ORDER_ACTION OA
+ 
+    PLAN ORD
+		WHERE ORD.ORDER_ID = IDORDER
+          AND ORD.TEMPLATE_ORDER_FLAG  IN (0 ,1 )
+          AND ORD.ORIG_ORD_AS_FLAG = 0
+          AND ORD.ACTIVE_IND = 1
+    JOIN ORC
+		WHERE ORC.CATALOG_CD = ORD.CATALOG_CD
+    JOIN OA
+		WHERE OA.ORDER_ID = ORD.ORDER_ID
+          AND OA.ACTION_TYPE_CD = 2534.00
+    ORDER
+        ORD.ORDER_ID
+ 
+    HEAD ORD.ORDER_ID
+ 
+      PFID -> XCNT = PFID ->XCNT  + 1
+      ,STAT = ALTERLIST ( PFID -> XORD ,  PFID -> XCNT )
+      ,PFID -> XORD[PFID -> XCNT] -> ITEMID         = PFID -> XCNT
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERID        = ORD.ORDER_ID
+      ,PFID -> XORD[PFID -> XCNT] -> PERSONID       = ORD.PERSON_ID
+      ,PFID -> XORD[PFID -> XCNT] -> CATALOG_CD     = ORC.CATALOG_CD
+  		IF ($FOSTATE = "MPCREATE")
+  			PFID-> XORD[PFID-> XCNT]-> ORDERID_DESC =
+  				CONCAT(TRIM(CNVTSTRING(ORD.ORDER_ID)),":MP")
+  		ELSE
+  			PFID-> XORD[PFID-> XCNT]-> ORDERID_DESC =
+  				CONCAT(TRIM(CNVTSTRING(ORD.ORDER_ID)),":",ORC.primary_mnemonic)
+  		ENDIF
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERDESC      = ORC.PRIMARY_MNEMONIC
+      ,PFID -> XORD[PFID -> XCNT] -> MODTYPE        = ORC.ACTIVITY_SUBTYPE_CD
+	  ,PFID -> XORD[PFID -> XCNT] -> ENCTR_ID       = $ENCTRID
+  	  ,PFID -> XORD[PFID -> XCNT] -> ORIGENCTRID    = $ENCTRID
+      ,PFID -> XORD[PFID -> XCNT] -> DATEORDER      = FORMAT(ORD.ORIG_ORDER_DT_TM,"MM/DD/YYYY HH:MM")
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERDTTM      = ORD.ORIG_ORDER_DT_TM
+      ,PFID -> XORD[PFID -> XCNT] -> ORDSTATUS      = UAR_GET_CODE_DISPLAY(ORD.ORDER_STATUS_CD)
+      ,PFID -> XORD[PFID -> XCNT] -> DEPTORDSTATUS  = UAR_GET_CODE_DISPLAY(ORD.DEPT_STATUS_CD)
+      ,PFID -> XORD[PFID -> XCNT] -> CLNDISPLINE    = ORD.CLINICAL_DISPLAY_LINE
+      ,PFID -> XORD[PFID -> XCNT] -> NEEDDOCCOSIGN = ORD.NEED_DOCTOR_COSIGN_IND
+      ,PFID -> XORD[PFID -> XCNT] -> NEEDPHYSVALID = ORD.NEED_PHYSICIAN_VALIDATE_IND
+      ,PFID -> XORD[PFID -> XCNT] -> ORDERPROVIDER  = OA.ORDER_PROVIDER_ID
+      ,PFID -> XORD[PFID -> XCNT] -> DISPLAYKEY     = UAR_GET_DISPLAYKEY(ORD.CATALOG_CD)
+      ,PFID -> XORD[PFID -> XCNT] -> EXCLUD_FLAG    = 0
+      ,PFID -> XORD[PFID -> XCNT] -> MODIFYFLAG     = "No"
+      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATUS = "NEW"
+      ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATLVL= 0
+      ,PFID -> XORD[PFID -> XCNT] -> EPREORDERCHGS  = "DEFAULT_VALUE"
+      ,PFID -> XORD[PFID -> XCNT] -> EXAMFORMID     = EPPFRFID
+      ,PFID -> XORD[PFID -> XCNT] -> PF_CE_EVTID    = 0
+      ,PFID -> XORD[PFID -> XCNT] -> EP_CE_EVTID    = 0
+      ,PFID -> XORD[PFID -> XCNT] -> SCH_EVTID      = 0
+	  ,PFID -> XORD[PFID -> XCNT] -> CT_MOD_CD      = 0
+	  ,PFID -> XORD[PFID -> XCNT] -> SUBTYPE_CD     = 0
+  	WITH NOCOUNTER, TIME = 120
+    IF (PFID->XCNT > 0)
+        SELECT
+            XID       = D1.SEQ
+        FROM
+            (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+        WHERE PFID -> XORD[D1.SEQ] -> CATALOG_CD in (
+            33412953.0
+            ,209571719.0
+            ,267976692.0
+            ,33413214.0
+            ,1572269379.0
+            ,33413763.0
+            ,33413565.0
+            ,33413847.0
+        )
+        DETAIL
+            PFID-> XORD[XID] -> EXCLUD_FLAG =  10
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID       = D1.seq
+        FROM
+            CUST_OPRDWL_RADORD C
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE PFID-> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+        JOIN C
+            WHERE C.CATALOG_CD = PFID-> XORD[D1.SEQ] -> CATALOG_CD
+              AND C.ACTIVE_IND > 0
+        DETAIL
+            PFID-> XORD[XID] -> CT_MOD_CD = C.HASH_CD
+            ,PFID-> XORD[XID] -> SUBTYPE_CD = C.SUBTYPE_CD
+        WITH NOCOUNTER
+ 
+          SELECT
+        ITEM_INDX = D1.SEQ
+          FROM
+        SCH_EVENT_ATTACH   S
+        , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+          PLAN D1
+              WHERE PFID -> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+        JOIN S
+            WHERE S.ORDER_ID = PFID -> XORD[D1.SEQ] -> ORDERID
+ 
+          DETAIL
+              PFID -> XORD[ITEM_INDX]->SCH_EVTID = S.SCH_EVENT_ID
+          WITH NOCOUNTER
+    ENDIF
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDFO(NULL)
+ 
+RECORD  SPFID  (
+	1 XCNT                = I2
+	1 XORD [*]
+	  2   ITEMID                = I4
+	  2   EXCLUD_FLAG           = I4
+	  2   DAYS                  = I4
+	  2   PETORDER              = F8
+	  2   CATALOG_CD            = F8
+	  2   ORDERID               = F8
+	  2   ORDERID_DESC          = C200
+	  2   MODTYPE               = F8
+	  2   PERSONID              = F8
+	  2   ORDSTATUS             = C30
+	  2   ALERT_FLAG            = C30
+	  2   ORDERPROVIDER         = F8
+	  2   XREQSTARTDTTM         = C30
+	  2   XSTOPDTTM             = C30
+	  2   XEXPIREDTTM           = C30
+	  2   ORDERDTTM             = DQ8
+	  2   DATEORDER             = C30
+	  2   ORDERDESC             = C200
+	  2   CLNDISPLINE           = C300
+	  2   DEPTORDSTATUS         = C30
+	  2   SEDATIONTYPE          = C30
+	  2   DISPLAYKEY            = C250
+	  2   NEEDDOCCOSIGN   		= F8
+	  2   NEEDPHYSVALID			= F8
+	  2   CT_MOD_CD             = F8
+	  2   SCH_EVT_ID            = F8
+	  2   SUBTYPE_CD            = F8
+	  2   NOPFORMID             = VC
+	  2   RELINKFLAG            = VC
+	  2   RELINKORDERID         = F8
+	  2   RELINKORDERNOTE       = VC
+	)
+ 
+    SELECT INTO "nl:"
+    FROM
+      ORDER_FUTURE_INFO ORF
+      , ORDERS          ORD
+      , ORDER_CATALOG   ORC
+      , ORDER_ACTION    OA
+ 
+    PLAN ORF
+		WHERE ORF.EXPIRATION_DT_TM > CNVTDATETIME(CURDATE,0)
+	JOIN ORD
+		WHERE ORD.ORDER_ID              = ORF.ORDER_ID
+		  AND ORD.ORIG_ORDER_DT_TM > CNVTLOOKBEHIND("40,D");90
+		  AND ORD.ACTIVITY_TYPE_CD IN (711.00)
+		  AND ORD.ORDER_STATUS_CD        = 2546.00
+		  AND ORD.NEED_DOCTOR_COSIGN_IND = 0
+		  AND ORD.NEED_PHYSICIAN_VALIDATE_IND = 0
+		  AND ORD.TEMPLATE_ORDER_FLAG  IN (0 ,1 )
+		  AND ORD.ORIG_ORD_AS_FLAG       = 0
+		  AND ORD.ACTIVE_IND             = 1
+	JOIN ORC
+		WHERE ORC.CATALOG_CD = ORD.CATALOG_CD
+		  AND ORC.ACTIVITY_SUBTYPE_CD IN (
+			633747.00,
+			633750.00,
+			633751.00,
+			110440686.00
+ 
+		)
+	JOIN OA
+		WHERE OA.ORDER_ID = ORD.ORDER_ID
+		  AND OA.action_type_cd = 2534.00
+ 
+    ORDER
+		ORF.ORDER_ID
+ 
+	HEAD ORF.ORDER_ID
+		SPFID -> XCNT = SPFID ->XCNT  + 1
+		,STAT = ALTERLIST ( SPFID -> XORD ,  SPFID -> XCNT )
+		,SPFID -> XORD[SPFID -> XCNT]-> ITEMID        = SPFID -> XCNT
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERID       = ORF.ORDER_ID
+		,SPFID -> XORD[SPFID -> XCNT]-> PERSONID      = ORD.PERSON_ID
+		,SPFID -> XORD[SPFID -> XCNT]-> DAYS 		  = DATETIMEDIFF(CNVTDATETIME(CURDATE,CURTIME3),ORD.ORIG_ORDER_DT_TM)
+		,SPFID -> XORD[SPFID -> XCNT]-> CATALOG_CD    = ORC.CATALOG_CD
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERID_DESC  = ORC.PRIMARY_MNEMONIC
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERDESC     = ORC.PRIMARY_MNEMONIC
+		,SPFID -> XORD[SPFID -> XCNT]-> MODTYPE       = ORC.ACTIVITY_SUBTYPE_CD
+		,SPFID -> XORD[SPFID -> XCNT]-> DATEORDER     = FORMAT(ORD.ORIG_ORDER_DT_TM,"MM/DD/YYYY HH:MM")
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERDTTM     = ORD.ORIG_ORDER_DT_TM
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDSTATUS     = UAR_GET_CODE_DISPLAY(ORD.ORDER_STATUS_CD)
+		,SPFID -> XORD[SPFID -> XCNT]-> XREQSTARTDTTM = FORMAT(ORF.BEGIN_DUE_DT_TM,"MM/DD/YY HH:MM")
+		,SPFID -> XORD[SPFID -> XCNT]-> XSTOPDTTM     = FORMAT(ORF.END_DUE_DT_TM,"MM/DD/YY HH:MM")
+		,SPFID -> XORD[SPFID -> XCNT]-> XEXPIREDTTM   = FORMAT(ORF.EXPIRATION_DT_TM,"MM/DD/YY HH:MM")
+		,SPFID -> XORD[SPFID -> XCNT]-> DEPTORDSTATUS = UAR_GET_CODE_DISPLAY(ORD.DEPT_STATUS_CD)
+		,SPFID -> XORD[SPFID -> XCNT]-> CLNDISPLINE   = ORD.CLINICAL_DISPLAY_LINE
+		,SPFID -> XORD[SPFID -> XCNT]-> EXCLUD_FLAG   = 0
+		,SPFID -> XORD[SPFID -> XCNT]-> NEEDDOCCOSIGN = ORD.NEED_DOCTOR_COSIGN_IND
+		,SPFID -> XORD[SPFID -> XCNT]-> NEEDPHYSVALID = ORD.NEED_PHYSICIAN_VALIDATE_IND
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERPROVIDER = OA.ORDER_PROVIDER_ID
+		,SPFID -> XORD[SPFID -> XCNT]-> DISPLAYKEY    = UAR_GET_DISPLAYKEY(ORD.CATALOG_CD)
+		,IF ( ORC.ACTIVITY_SUBTYPE_CD = 633751 AND ORC.PRIMARY_MNEMONIC = PATSTRING("* PET *") )
+			SPFID -> XORD[SPFID -> XCNT]-> PETORDER   = ORD.CATALOG_CD
+		ENDIF
+	WITH orahintcbo("leading (ORF) index(ORF XIE1ORDER_FUTURE_INFO)"), NOCOUNTER, TIME = 120
+ 
+    IF (SPFID->XCNT > 0)
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+        WHERE SPFID -> XORD[D1.SEQ]-> CATALOG_CD IN (
+            33412953.0
+            ,209571719.0
+            ,267976692.0
+            ,33413214.0
+            ,1572269379.0
+            ,33413763.0
+            ,33413565.0
+            ,33413847.0
+        )
+ 
+        DETAIL
+            SPFID -> XORD[XID]-> EXCLUD_FLAG =  10
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+        WHERE SPFID -> XORD[D1.SEQ]-> MODTYPE IN (
+                633747.00,
+                633750.00
+                )
+          AND SPFID -> XORD[D1.SEQ]->ORDERDTTM  < CNVTDATETIME("26-APR-2019 00:00:00")
+ 
+        DETAIL
+            SPFID -> XORD[XID]-> EXCLUD_FLAG =  11
+        WITH NOCOUNTER
+ 
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+          (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        WHERE SPFID -> XORD[D1.SEQ]-> MODTYPE in (
+               633748.00,
+               633751.00
+           )
+          AND SPFID -> XORD[D1.SEQ]-> ORDERDTTM < CNVTDATETIME("26-APR-2019 00:00:00")
+ 
+        DETAIL
+            SPFID -> XORD[XID]->EXCLUD_FLAG = 11
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            CUST_OPRDWL_RADORD C
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+        JOIN C
+            WHERE C.CATALOG_CD = SPFID -> XORD[D1.SEQ]-> CATALOG_CD
+              AND C.ACTIVE_IND = 1
+        DETAIL
+            SPFID -> XORD[XID]-> CT_MOD_CD   = C.HASH_CD
+            ,SPFID -> XORD[XID]-> SUBTYPE_CD = C.SUBTYPE_CD
+        WITH NOCOUNTER
+ 
+        SELECT INTO "nl:"
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            ORDER_DETAIL   OD
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]->EXCLUD_FLAG > 0
+        JOIN OD
+            WHERE OD.ORDER_ID =  SPFID -> XORD[D1.SEQ]-> ORDERID
+              AND OD.OE_FIELD_ID = 731472.00
+        ORDER BY
+            OD.ORDER_ID
+            , OD.OE_FIELD_ID
+            , OD.ACTION_SEQUENCE   DESC
+ 
+        HEAD   OD.ACTION_SEQUENCE
+            IF( OD.OE_FIELD_DISPLAY_VALUE = "Stat")
+                SPFID -> XORD[XID]-> EXCLUD_FLAG =  0
+            ENDIF
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            CUST_OPRDWL_ORD   C
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+        JOIN C
+            WHERE C.ORDER_ID = SPFID -> XORD[D1.SEQ]-> ORDERID
+              AND C.ACTIVE_IND = 1
+        DETAIL
+            IF ( C.pform_id > 0)
+                SPFID -> XORD[XID]-> EXCLUD_FLAG =  90
+            ELSE
+                SPFID -> XORD[XID]-> EXCLUD_FLAG =  90
+                SPFID -> XORD[XID]-> NOPFORMID = "NOPFORMID"
+            ENDIF
+        WITH NOCOUNTER
+ 
+        SELECT
+            ITEM_INDX = D1.SEQ
+        FROM
+            SCH_EVENT_ATTACH   S
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+        JOIN S
+          WHERE S.ORDER_ID = SPFID -> XORD[D1.SEQ]-> ORDERID
+ 
+        DETAIL
+            SPFID -> XORD[ITEM_INDX]->SCH_EVT_ID = S.SCH_EVENT_ID
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID        = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+ 
+        DETAIL
+            PFID-> XCNT = PFID->XCNT  + 1
+            ,STAT = ALTERLIST ( PFID-> XORD ,  PFID-> XCNT )
+            ,PFID-> XORD[PFID-> XCNT]-> ITEMID         = PFID-> XCNT
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERID        = SPFID -> XORD[XID]-> ORDERID
+            ,PFID-> XORD[PFID-> XCNT]-> PERSONID       = SPFID -> XORD[XID]-> PERSONID
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERID_DESC   = SPFID -> XORD[XID]-> ORDERID_DESC
+            ,PFID-> XORD[PFID-> XCNT]-> XDAYS          = SPFID -> XORD[XID]-> DAYS
+            ,PFID-> XORD[PFID-> XCNT]-> MODTYPE        = SPFID -> XORD[XID]-> MODTYPE
+            ,PFID-> XORD[PFID-> XCNT]-> DATEORDER      = SPFID -> XORD[XID]-> DATEORDER
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERDTTM      = SPFID -> XORD[XID]-> ORDERDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> ORDSTATUS      = SPFID -> XORD[XID]-> ORDSTATUS
+            ,PFID-> XORD[PFID-> XCNT]-> XREQSTARTDTTM  = SPFID -> XORD[XID]-> XREQSTARTDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> XSTOPDTTM      = SPFID -> XORD[XID]-> XSTOPDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> XEXPIREDTTM    = SPFID -> XORD[XID]-> XEXPIREDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERDESC      = SPFID -> XORD[XID]-> ORDERDESC
+            ,PFID-> XORD[PFID-> XCNT]-> DEPTORDSTATUS  = SPFID -> XORD[XID]-> DEPTORDSTATUS
+            ,PFID-> XORD[PFID-> XCNT]-> CLNDISPLINE    = SPFID -> XORD[XID]-> CLNDISPLINE
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERPROVIDER  = SPFID -> XORD[XID]-> ORDERPROVIDER
+            ,PFID-> XORD[PFID-> XCNT]-> ALERTFLAG      = SPFID -> XORD[XID]-> ALERT_FLAG
+            ,PFID-> XORD[PFID-> XCNT]-> NEEDPHYSVALID  = SPFID -> XORD[XID]->NEEDPHYSVALID
+            ,PFID-> XORD[PFID-> XCNT]-> NEEDDOCCOSIGN  = SPFID -> XORD[XID]->NEEDDOCCOSIGN
+            ,PFID-> XORD[PFID-> XCNT]-> DISPLAYKEY     = SPFID -> XORD[XID]-> DISPLAYKEY
+            ,PFID-> XORD[PFID-> XCNT]-> CT_MOD_CD      = SPFID -> XORD[XID]-> CT_MOD_CD
+            ,PFID-> XORD[PFID-> XCNT]-> SUBTYPE_CD     = SPFID -> XORD[XID]-> SUBTYPE_CD
+            ,PFID-> XORD[PFID-> XCNT]-> CATALOG_CD     = SPFID -> XORD[XID]-> CATALOG_CD
+            ,PFID-> XORD[PFID-> XCNT]-> MODIFYFLAG     = "No"
+            ,PFID-> XORD[PFID-> XCNT]-> EXCLUD_FLAG    = 0
+            ,PFID-> XORD[PFID-> XCNT]-> PROTOCOLSTATUS = "NEW"
+            ,PFID-> XORD[PFID-> XCNT]-> PROTOCOLSTATLVL= 0
+            ,PFID-> XORD[PFID-> XCNT]-> EXAMFORMID     = EPPFRFID
+            ,PFID-> XORD[PFID-> XCNT]-> PF_CE_EVTID    = 0
+            ,PFID-> XORD[PFID-> XCNT]-> EP_CE_EVTID    = 0
+            ,PFID-> XORD[PFID-> XCNT]-> NOPFORMID      = SPFID -> XORD[XID]->NOPFORMID
+            ,PFID-> XORD[PFID-> XCNT]-> RELINKFLAG     = SPFID -> XORD[XID]->RELINKFLAG
+            ,PFID-> XORD[PFID-> XCNT]-> RELINKORDERID  = SPFID -> XORD[XID]->RELINKORDERID
+            ,PFID-> XORD[PFID-> XCNT]-> RELINKORDERNOTE =SPFID -> XORD[XID]->RELINKORDERNOTE
+            ,PFID-> XORD[PFID-> XCNT]-> XPETORDER       =SPFID -> XORD[XID]->PETORDER
+            ,PFID-> XORD[PFID-> XCNT]-> SCH_EVTID       =SPFID -> XORD[XID]->SCH_EVT_ID
+        WITH NOCOUNTER
+    ENDIF
+FREE RECORD SPFID
+END ;SUBROUTINE END
+;==================================================================================
+SUBROUTINE   SRLDFOLIM(NULL)
+DECLARE LASTCHGDTTM = VC
+ 
+RECORD  SPFID  (
+	1 XCNT                = I2
+	1 XORD [*]
+	  2   ITEMID                = I4
+	  2   EXCLUD_FLAG           = I4
+	  2   DAYS                  = I4
+	  2   PETORDER              = F8
+	  2   CATALOG_CD            = F8
+	  2   ORDERID               = F8
+	  2   ORDERID_DESC          = C200
+	  2   MODTYPE               = F8
+	  2   PERSONID              = F8
+	  2   ORDSTATUS             = C30
+	  2   ALERT_FLAG            = C30
+	  2   ORDERPROVIDER         = F8
+	  2   XREQSTARTDTTM         = C30
+	  2   XSTOPDTTM             = C30
+	  2   XEXPIREDTTM           = C30
+	  2   ORDERDTTM             = DQ8
+	  2   DATEORDER             = C30
+	  2   ORDERDESC             = C200
+	  2   CLNDISPLINE           = C300
+	  2   DEPTORDSTATUS         = C30
+	  2   SEDATIONTYPE          = C30
+	  2   DISPLAYKEY            = C250
+	  2   NEEDDOCCOSIGN   		= F8
+	  2   NEEDPHYSVALID			= F8
+	  2   CT_MOD_CD             = F8
+	  2   SCH_EVT_ID            = F8
+	  2   SUBTYPE_CD            = F8
+	  2   NOPFORMID             = VC
+	  2   RELINKFLAG            = VC
+	  2   RELINKORDERID         = F8
+	  2   RELINKORDERNOTE       = VC
+	)
+ 
+	SELECT INTO "NL:"
+		lastchg = MAX(c.UPDT_DT_TM)
+	FROM CUST_OPRDWL_ORD C
+	DETAIL
+		LASTCHGDTTM = format(lastchg,"dd-MMM-yyyy HH:MM:SS;;Q")
+	WITH NOCOUNTER
+ 
+  SELECT INTO "nl:"
+    FROM
+       ORDERS          ORD
+      , ORDER_CATALOG   ORC
+      , ORDER_ACTION    OA
+ 
+    PLAN ORD
+    	WHERE ORD.ORIG_ORDER_DT_TM > CNVTLOOKBEHIND("4,D" )
+		  AND ORD.ACTIVITY_TYPE_CD IN (711.00)
+		  AND ORD.ORDER_STATUS_CD        in ( 2546.00,2550.0)
+		;WHERE ORD.ORIG_ORDER_DT_TM > CNVTLOOKBEHIND("1,D", CNVTDATETIME(LASTCHGDTTM))
+		;  AND ORD.ACTIVITY_TYPE_CD IN (711.00)
+		;  AND ORD.ORDER_STATUS_CD        = 2546.00
+		  AND ORD.NEED_DOCTOR_COSIGN_IND = 0
+		  AND ORD.NEED_PHYSICIAN_VALIDATE_IND = 0
+		  AND ORD.TEMPLATE_ORDER_FLAG  IN (0 ,1 )
+		  AND ORD.ORIG_ORD_AS_FLAG       = 0
+		  AND ORD.ACTIVE_IND             = 1
+	JOIN ORC
+		WHERE ORC.CATALOG_CD = ORD.CATALOG_CD
+		  AND ORC.ACTIVITY_SUBTYPE_CD IN (
+			633747.00,
+			633750.00,
+			633751.00,
+			110440686.00
+ 
+		)
+	JOIN OA
+		WHERE OA.ORDER_ID = ORD.ORDER_ID
+		  AND OA.action_type_cd = 2534.00
+ 
+    ORDER
+		ORD.ORDER_ID
+ 
+	HEAD ORD.ORDER_ID
+		SPFID -> XCNT = SPFID ->XCNT  + 1
+		,STAT = ALTERLIST ( SPFID -> XORD ,  SPFID -> XCNT )
+		,SPFID -> XORD[SPFID -> XCNT]-> ITEMID        = SPFID -> XCNT
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERID       = ORD.ORDER_ID
+		,SPFID -> XORD[SPFID -> XCNT]-> PERSONID      = ORD.PERSON_ID
+		,SPFID -> XORD[SPFID -> XCNT]-> DAYS 		  = DATETIMEDIFF(CNVTDATETIME(CURDATE,CURTIME3),ORD.ORIG_ORDER_DT_TM)
+		,SPFID -> XORD[SPFID -> XCNT]-> CATALOG_CD    = ORC.CATALOG_CD
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERID_DESC  = ORC.PRIMARY_MNEMONIC
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERDESC     = ORC.PRIMARY_MNEMONIC
+		,SPFID -> XORD[SPFID -> XCNT]-> MODTYPE       = ORC.ACTIVITY_SUBTYPE_CD
+		,SPFID -> XORD[SPFID -> XCNT]-> DATEORDER     = FORMAT(ORD.ORIG_ORDER_DT_TM,"MM/DD/YYYY HH:MM")
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERDTTM     = ORD.ORIG_ORDER_DT_TM
+		;020
+		;,SPFID -> XORD[SPFID -> XCNT]-> ORDSTATUS     = UAR_GET_CODE_DISPLAY(ORD.ORDER_STATUS_CD)
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDSTATUS     = "FUTURE"
+		,SPFID -> XORD[SPFID -> XCNT]-> DEPTORDSTATUS = UAR_GET_CODE_DISPLAY(ORD.DEPT_STATUS_CD)
+		,SPFID -> XORD[SPFID -> XCNT]-> CLNDISPLINE   = ORD.CLINICAL_DISPLAY_LINE
+		,SPFID -> XORD[SPFID -> XCNT]-> EXCLUD_FLAG   = 0
+		,SPFID -> XORD[SPFID -> XCNT]-> NEEDDOCCOSIGN = ORD.NEED_DOCTOR_COSIGN_IND
+		,SPFID -> XORD[SPFID -> XCNT]-> NEEDPHYSVALID = ORD.NEED_PHYSICIAN_VALIDATE_IND
+		,SPFID -> XORD[SPFID -> XCNT]-> ORDERPROVIDER = OA.ORDER_PROVIDER_ID
+		,SPFID -> XORD[SPFID -> XCNT]-> DISPLAYKEY    = UAR_GET_DISPLAYKEY(ORD.CATALOG_CD)
+		,IF ( ORC.ACTIVITY_SUBTYPE_CD = 633751 AND ORC.PRIMARY_MNEMONIC = PATSTRING("* PET *") )
+			SPFID -> XORD[SPFID -> XCNT]-> PETORDER   = ORD.CATALOG_CD
+		ENDIF
+	WITH NOCOUNTER , TIME = 120
+ 
+    IF (SPFID->XCNT > 0)
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+        WHERE SPFID -> XORD[D1.SEQ]-> CATALOG_CD IN (
+            33412953.0
+            ,209571719.0
+            ,267976692.0
+            ,33413214.0
+            ,1572269379.0
+            ,33413763.0
+            ,33413565.0
+            ,33413847.0
+        )
+ 
+        DETAIL
+            SPFID -> XORD[XID]-> EXCLUD_FLAG =  10
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+        WHERE SPFID -> XORD[D1.SEQ]-> MODTYPE IN (
+                633747.00,
+                633750.00
+                )
+          AND SPFID -> XORD[D1.SEQ]->ORDERDTTM  < CNVTDATETIME("26-APR-2019 00:00:00")
+ 
+        DETAIL
+            SPFID -> XORD[XID]-> EXCLUD_FLAG =  11
+        WITH NOCOUNTER
+ 
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+          (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        WHERE SPFID -> XORD[D1.SEQ]-> MODTYPE in (
+               633748.00,
+               633751.00
+           )
+          AND SPFID -> XORD[D1.SEQ]-> ORDERDTTM < CNVTDATETIME("26-APR-2019 00:00:00")
+ 
+        DETAIL
+            SPFID -> XORD[XID]->EXCLUD_FLAG = 11
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            CUST_OPRDWL_RADORD C
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+        JOIN C
+            WHERE C.CATALOG_CD = SPFID -> XORD[D1.SEQ]-> CATALOG_CD
+              AND C.ACTIVE_IND = 1
+        DETAIL
+            SPFID -> XORD[XID]-> CT_MOD_CD   = C.HASH_CD
+            ,SPFID -> XORD[XID]-> SUBTYPE_CD = C.SUBTYPE_CD
+        WITH NOCOUNTER
+ 
+        SELECT INTO "nl:"
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            ORDER_DETAIL   OD
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]->EXCLUD_FLAG > 0
+        JOIN OD
+            WHERE OD.ORDER_ID =  SPFID -> XORD[D1.SEQ]-> ORDERID
+              AND OD.OE_FIELD_ID = 731472.00
+        ORDER BY
+            OD.ORDER_ID
+            , OD.OE_FIELD_ID
+            , OD.ACTION_SEQUENCE   DESC
+ 
+        HEAD   OD.ACTION_SEQUENCE
+            IF( OD.OE_FIELD_DISPLAY_VALUE = "Stat")
+                SPFID -> XORD[XID]-> EXCLUD_FLAG =  0
+            ENDIF
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            CUST_OPRDWL_ORD   C
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+        JOIN C
+            WHERE C.ORDER_ID = SPFID -> XORD[D1.SEQ]-> ORDERID
+              AND C.ACTIVE_IND = 1
+        DETAIL
+            IF ( C.pform_id > 0)
+                SPFID -> XORD[XID]-> EXCLUD_FLAG =  90
+            ELSE
+                SPFID -> XORD[XID]-> EXCLUD_FLAG =  90
+                SPFID -> XORD[XID]-> NOPFORMID = "NOPFORMID"
+            ENDIF
+        WITH NOCOUNTER
+ 
+        SELECT
+            ITEM_INDX = D1.SEQ
+        FROM
+            SCH_EVENT_ATTACH   S
+            , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+        PLAN D1
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+        JOIN S
+          WHERE S.ORDER_ID = SPFID -> XORD[D1.SEQ]-> ORDERID
+ 
+        DETAIL
+            SPFID -> XORD[ITEM_INDX]->SCH_EVT_ID = S.SCH_EVENT_ID
+        WITH NOCOUNTER
+ 
+        SELECT
+            XID        = SPFID->XORD[D1.SEQ].ITEMID
+        FROM
+            (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+            WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+ 
+        DETAIL
+            PFID-> XCNT = PFID->XCNT  + 1
+            ,STAT = ALTERLIST ( PFID-> XORD ,  PFID-> XCNT )
+            ,PFID-> XORD[PFID-> XCNT]-> ITEMID         = PFID-> XCNT
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERID        = SPFID -> XORD[XID]-> ORDERID
+            ,PFID-> XORD[PFID-> XCNT]-> PERSONID       = SPFID -> XORD[XID]-> PERSONID
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERID_DESC   = SPFID -> XORD[XID]-> ORDERID_DESC
+            ,PFID-> XORD[PFID-> XCNT]-> XDAYS          = SPFID -> XORD[XID]-> DAYS
+            ,PFID-> XORD[PFID-> XCNT]-> MODTYPE        = SPFID -> XORD[XID]-> MODTYPE
+            ,PFID-> XORD[PFID-> XCNT]-> DATEORDER      = SPFID -> XORD[XID]-> DATEORDER
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERDTTM      = SPFID -> XORD[XID]-> ORDERDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> ORDSTATUS      = SPFID -> XORD[XID]-> ORDSTATUS
+            ,PFID-> XORD[PFID-> XCNT]-> XREQSTARTDTTM  = SPFID -> XORD[XID]-> XREQSTARTDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> XSTOPDTTM      = SPFID -> XORD[XID]-> XSTOPDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> XEXPIREDTTM    = SPFID -> XORD[XID]-> XEXPIREDTTM
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERDESC      = SPFID -> XORD[XID]-> ORDERDESC
+            ,PFID-> XORD[PFID-> XCNT]-> DEPTORDSTATUS  = SPFID -> XORD[XID]-> DEPTORDSTATUS
+            ,PFID-> XORD[PFID-> XCNT]-> CLNDISPLINE    = SPFID -> XORD[XID]-> CLNDISPLINE
+            ,PFID-> XORD[PFID-> XCNT]-> ORDERPROVIDER  = SPFID -> XORD[XID]-> ORDERPROVIDER
+            ,PFID-> XORD[PFID-> XCNT]-> ALERTFLAG      = SPFID -> XORD[XID]-> ALERT_FLAG
+            ,PFID-> XORD[PFID-> XCNT]-> NEEDPHYSVALID  = SPFID -> XORD[XID]->NEEDPHYSVALID
+            ,PFID-> XORD[PFID-> XCNT]-> NEEDDOCCOSIGN  = SPFID -> XORD[XID]->NEEDDOCCOSIGN
+            ,PFID-> XORD[PFID-> XCNT]-> DISPLAYKEY     = SPFID -> XORD[XID]-> DISPLAYKEY
+            ,PFID-> XORD[PFID-> XCNT]-> CT_MOD_CD      = SPFID -> XORD[XID]-> CT_MOD_CD
+            ,PFID-> XORD[PFID-> XCNT]-> SUBTYPE_CD     = SPFID -> XORD[XID]-> SUBTYPE_CD
+            ,PFID-> XORD[PFID-> XCNT]-> CATALOG_CD     = SPFID -> XORD[XID]-> CATALOG_CD
+            ,PFID-> XORD[PFID-> XCNT]-> MODIFYFLAG     = "No"
+            ,PFID-> XORD[PFID-> XCNT]-> EXCLUD_FLAG    = 0
+            ,PFID-> XORD[PFID-> XCNT]-> PROTOCOLSTATUS = "NEW"
+            ,PFID-> XORD[PFID-> XCNT]-> PROTOCOLSTATLVL= 0
+            ,PFID-> XORD[PFID-> XCNT]-> EXAMFORMID     = EPPFRFID
+            ,PFID-> XORD[PFID-> XCNT]-> PF_CE_EVTID    = 0
+            ,PFID-> XORD[PFID-> XCNT]-> EP_CE_EVTID    = 0
+            ,PFID-> XORD[PFID-> XCNT]-> NOPFORMID      = SPFID -> XORD[XID]->NOPFORMID
+            ,PFID-> XORD[PFID-> XCNT]-> RELINKFLAG     = SPFID -> XORD[XID]->RELINKFLAG
+            ,PFID-> XORD[PFID-> XCNT]-> RELINKORDERID  = SPFID -> XORD[XID]->RELINKORDERID
+            ,PFID-> XORD[PFID-> XCNT]-> RELINKORDERNOTE =SPFID -> XORD[XID]->RELINKORDERNOTE
+            ,PFID-> XORD[PFID-> XCNT]-> XPETORDER       =SPFID -> XORD[XID]->PETORDER
+            ,PFID-> XORD[PFID-> XCNT]-> SCH_EVTID       =SPFID -> XORD[XID]->SCH_EVT_ID
+        WITH NOCOUNTER
+    ENDIF
+FREE RECORD SPFID
+END ;SUBROUTINE END
+ 
+;==================================================================================
+SUBROUTINE   SRLDPRS (IDPERSON)
+ 
+RECORD  SPFID  (
+1 XCNT                = I2
+1 XORD [*]
+  2   ITEMID                = I4
+  2   EXCLUD_FLAG           = I4
+  2   CATALOG_CD            = F8
+  2   ORDERID               = F8
+  2   ORDERID_DESC          = C200
+  2   MODTYPE               = F8
+  2   PERSONID              = F8
+  2   ORDSTATUS             = C30
+  2   ALERT_FLAG            = C30
+  2   ORDERPROVIDER         = F8
+  2   XREQSTARTDTTM         = C30
+  2   XSTOPDTTM             = C30
+  2   XEXPIREDTTM           = C30
+  2   ORDERDTTM             = DQ8
+  2   DATEORDER             = C30
+  2   ORDERDESC             = C200
+  2   CLNDISPLINE           = C300
+  2   DEPTORDSTATUS         = C30
+  2   SEDATIONTYPE          = C30
+  2   DISPLAYKEY            = C250
+  2   NEEDDOCCOSIGN   = F8
+  2   NEEDPHYSVALID = F8
+  2   CT_MOD_CD             = F8
+  2   SCH_EVT_ID            = F8
+  )
+ 
+    SELECT INTO "nl:"
+    FROM
+    	 ORDERS   ORD
+    	, ORDER_CATALOG   ORC
+    	, ORDER_ACTION   OA
+ 
+    PLAN ORD
+          WHERE ORD.person_id = IDPERSON
+            		AND ORD.ORIG_ORDER_DT_TM > CNVTLOOKBEHIND("60,D");90
+                AND ORD.ACTIVITY_TYPE_CD IN (711.00)
+                AND ORD.ORDER_STATUS_CD    = 2546.00
+                AND ORD.NEED_DOCTOR_COSIGN_IND = 0
+                AND ORD.NEED_PHYSICIAN_VALIDATE_IND = 0
+                AND ORD.TEMPLATE_ORDER_FLAG  IN (0 ,1 )
+                AND ORD.ORIG_ORD_AS_FLAG = 0
+                AND ORD.ACTIVE_IND = 1
+            JOIN ORC WHERE ORC.catalog_cd = ORD.catalog_cd
+                AND ORC.ACTIVITY_SUBTYPE_CD IN (
+                633747.00,
+                ;633748.00,
+                633750.00,
+                633751.00,
+                110440686.00
+                )
+            JOIN OA WHERE OA.ORDER_ID = ORD.ORDER_ID
+            AND OA.action_type_cd = 2534.00
+ 
+    ORDER BY
+    	ORD.ORDER_ID
+ 
+        HEAD ORD.ORDER_ID
+          SPFID -> XCNT = SPFID ->XCNT  + 1
+          ,STAT = ALTERLIST ( SPFID -> XORD ,  SPFID -> XCNT )
+          ,SPFID -> XORD[SPFID -> XCNT] -> ITEMID         = SPFID -> XCNT
+          ,SPFID -> XORD[SPFID -> XCNT] -> ORDERID        = ORD.ORDER_ID
+          ,SPFID -> XORD[SPFID -> XCNT] -> PERSONID       = ORD.PERSON_ID
+          ,SPFID -> XORD[SPFID -> XCNT] -> CATALOG_CD     = ORC.catalog_cd
+          ,SPFID -> XORD[SPFID -> XCNT] -> ORDERID_DESC   = ORC.PRIMARY_MNEMONIC
+          ,SPFID -> XORD[SPFID -> XCNT] -> ORDERDESC      = UAR_GET_CODE_DISPLAY(ORC.catalog_cd)
+          ,SPFID -> XORD[SPFID -> XCNT] -> MODTYPE        = ORC.ACTIVITY_SUBTYPE_CD
+          ,SPFID -> XORD[SPFID -> XCNT] -> DATEORDER      = FORMAT(ORD.orig_order_dt_tm,"MM/DD/YYYY HH:MM")
+          ,SPFID -> XORD[SPFID -> XCNT] -> ORDERDTTM      = ORD.orig_order_dt_tm
+          ,SPFID -> XORD[SPFID -> XCNT] -> ORDSTATUS      = UAR_GET_CODE_DISPLAY(ORD.ORDER_STATUS_CD)
+          ,SPFID -> XORD[SPFID -> XCNT] -> CLNDISPLINE    = ORD.CLINICAL_DISPLAY_LINE
+          ,SPFID -> XORD[SPFID -> XCNT] -> EXCLUD_FLAG    = 0
+      	  ,SPFID -> XORD[SPFID -> XCNT] -> NEEDDOCCOSIGN = ORD.NEED_DOCTOR_COSIGN_IND
+          ,SPFID -> XORD[SPFID -> XCNT] -> NEEDPHYSVALID = ORD.NEED_PHYSICIAN_VALIDATE_IND
+          ,SPFID -> XORD[SPFID -> XCNT] -> ORDERPROVIDER  = OA.ORDER_PROVIDER_ID
+		  ,SPFID -> XORD[SPFID -> XCNT] -> DISPLAYKEY     = UAR_GET_DISPLAYKEY(ORD.CATALOG_CD)
+        WITH NOCOUNTER, TIME = 120
+ 
+    SELECT
+		ITEM_INDX = D1.SEQ
+    FROM
+		SCH_EVENT_ATTACH   S
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+    PLAN D1
+        WHERE SPFID -> XORD[D1.SEQ]-> EXCLUD_FLAG =  0
+	JOIN S
+      WHERE S.ORDER_ID = SPFID -> XORD[D1.SEQ]-> ORDERID
+ 
+    DETAIL
+        SPFID -> XORD[ITEM_INDX]->SCH_EVT_ID = S.SCH_EVENT_ID
+    WITH NOCOUNTER
+ 
+IF (SPFID ->XCNT > 0)
+	SELECT
+		XID= D1.SEQ
+	FROM
+		CUST_OPRDWL_ORD   C
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+	PLAN D1
+	JOIN C
+      WHERE C.ORDER_ID = SPFID->XORD[D1.SEQ].ORDERID
+	      AND C.ACTIVE_IND = 1
+  	DETAIL
+      SPFID->XORD[XID]-> EXCLUD_FLAG =  1
+	WITH NOCOUNTER, SEPARATOR=" ", FORMAT
+ 
+ SELECT
+        XID       = SPFID->XORD[D1.SEQ].ITEMID
+ FROM
+ 		CUST_OPRDWL_RADORD C
+         , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ 
+ PLAN D1
+     WHERE SPFID -> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+ JOIN C
+     WHERE C.catalog_cd = SPFID -> XORD[D1.SEQ] -> CATALOG_CD
+         AND C.ACTIVE_IND = 1
+  DETAIL
+      SPFID -> XORD[XID] -> CT_MOD_CD = C.hash_cd
+      ,SPFID -> XORD[XID] -> SUBTYPE_CD = C.subtype_cd
+ WITH NOCOUNTER
+ 
+ SELECT
+        XID       = SPFID->XORD[D1.SEQ].ITEMID
+ FROM
+     (DUMMYT   D1  WITH SEQ = VALUE(SIZE(SPFID->XORD, 5)))
+ WHERE SPFID -> XORD[D1.SEQ] -> EXCLUD_FLAG =  0
+ 
+ DETAIL
+ PFID -> XCNT = PFID ->XCNT  + 1
+   ,STAT = ALTERLIST ( PFID -> XORD ,  PFID -> XCNT )
+   ,PFID -> XORD[PFID -> XCNT] -> ITEMID         = PFID -> XCNT
+   ,PFID -> XORD[PFID -> XCNT] -> ORDERID        = SPFID -> XORD[XID] -> ORDERID
+   ,PFID -> XORD[PFID -> XCNT] -> PERSONID       = SPFID -> XORD[XID] -> PERSONID
+   ,PFID -> XORD[PFID -> XCNT] -> ORDERID_DESC   = SPFID -> XORD[XID] -> ORDERID_DESC
+   ,PFID -> XORD[PFID -> XCNT] -> MODTYPE        = SPFID -> XORD[XID] -> MODTYPE
+   ,PFID -> XORD[PFID -> XCNT] -> DATEORDER      = SPFID -> XORD[XID] -> DATEORDER
+   ,PFID -> XORD[PFID -> XCNT] -> ORDERDTTM      = SPFID -> XORD[XID] -> ORDERDTTM
+   ,PFID -> XORD[PFID -> XCNT] -> ORDSTATUS      = SPFID -> XORD[XID] -> ORDSTATUS
+   ,PFID -> XORD[PFID -> XCNT] -> XREQSTARTDTTM  = SPFID -> XORD[XID] -> XREQSTARTDTTM
+   ,PFID -> XORD[PFID -> XCNT] -> XSTOPDTTM      = SPFID -> XORD[XID] -> XSTOPDTTM
+   ,PFID -> XORD[PFID -> XCNT] -> XEXPIREDTTM    = SPFID -> XORD[XID] -> XEXPIREDTTM
+   ,PFID -> XORD[PFID -> XCNT] -> ORDERDESC      = SPFID -> XORD[XID] -> ORDERDESC
+   ,PFID -> XORD[PFID -> XCNT] -> DEPTORDSTATUS  = SPFID -> XORD[XID] -> DEPTORDSTATUS
+   ,PFID -> XORD[PFID -> XCNT] -> CLNDISPLINE    = SPFID -> XORD[XID] -> CLNDISPLINE
+   ,PFID -> XORD[PFID -> XCNT] -> ORDERPROVIDER  = SPFID -> XORD[XID] -> ORDERPROVIDER
+   ,PFID -> XORD[PFID -> XCNT] -> ALERTFLAG      = SPFID -> XORD[XID] -> ALERT_FLAG
+   ,PFID -> XORD[PFID -> XCNT] -> NEEDPHYSVALID  = SPFID -> XORD[XID] ->NEEDPHYSVALID
+   ,PFID -> XORD[PFID -> XCNT] -> NEEDDOCCOSIGN  = SPFID -> XORD[XID] ->NEEDDOCCOSIGN
+   ,PFID -> XORD[PFID -> XCNT] -> DISPLAYKEY     = SPFID -> XORD[XID] -> DISPLAYKEY
+   ,PFID -> XORD[PFID -> XCNT] -> SUBTYPE_CD     = SPFID -> XORD[XID] -> SUBTYPE_CD
+   ,PFID -> XORD[PFID -> XCNT] -> CATALOG_CD      = SPFID -> XORD[XID] -> CATALOG_CD
+   ,PFID -> XORD[PFID -> XCNT] -> MODIFYFLAG     = "No"
+   ,PFID -> XORD[PFID -> XCNT] -> EXCLUD_FLAG    = 0
+   ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATUS = "NEW"
+   ,PFID -> XORD[PFID -> XCNT] -> PROTOCOLSTATLVL= 0
+   ,PFID -> XORD[PFID -> XCNT] -> EXAMFORMID     = EPPFRFID
+   ,PFID -> XORD[PFID -> XCNT] -> PF_CE_EVTID    = 0
+   ,PFID -> XORD[PFID -> XCNT] -> EP_CE_EVTID    = 0
+			,PFID-> XORD[PFID-> XCNT]-> SCH_EVTID      = SPFID -> XORD[XID].SCH_EVT_ID
+          WITH NOCOUNTER
+ENDIF
+FREE RECORD SPFID
+END ;SUBROUTINE END
+;===============================================================================
+SUBROUTINE    SRPF_PROT (null)
+ 
+   SELECT  INTO "nl:"
+			CE.EVENT_CD,
+			CE.EVENT_END_DT_TM
+			,CE.RESULT_VAL
+			,XID      = PFID->XORD[D1.SEQ].ITEMID
+	FROM
+		  CLINICAL_EVENT  CE
+		  , (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+	PLAN D1
+	WHERE PFID->XORD[D1.SEQ].EXCLUD_FLAG = 0
+		 AND PFID -> XORD[D1.SEQ] -> PF_CE_EVTID   > 0
+		 AND PFID -> XORD[D1.SEQ] -> EP_CE_EVTID   > 0
+	JOIN CE
+	WHERE CE.parent_event_id = PFID -> XORD[D1.SEQ] -> EP_CE_EVTID
+		AND CE.VALID_UNTIL_DT_TM =CNVTDATETIME("31-DEC-2100 00:00:00")
+		AND CE.EVENT_CD IN (
+			 204661712,
+			 204661795
+		)
+		AND CE.PUBLISH_FLAG =1
+		AND CE.RESULT_STATUS_CD IN (ATHRSLTSTCD, ALTRSLSTCD, MODRSLSTCD); (35,25,34)
+		AND CE.EVENT_TAG!="Date\Time Correction"
+ 
+	ORDER
+		CE.EVENT_CD
+		, CE.EVENT_END_DT_TM   DESC
+	DETAIL
+		CASE (CE.event_cd)
+		OF 204661712.00:
+				IF ( CE.RESULT_VAL = patstring("*no changes" ))
+					 PFID->XORD[XID].PARENT_EVT_IDS = PFID->XORD[XID].PARENT_EVT_IDS + 1
+				ELSEIF ( CE.RESULT_VAL = patstring("*with modified contrast change" ))
+					 PFID -> XORD[XID].EPREORDERDAYS = DATETIMEDIFF(CNVTDATETIME(CURDATE,CURTIME3),CE.UPDT_DT_TM)
+					 PFID->XORD[XID].PARENT_EVT_IDS = PFID->XORD[XID].PARENT_EVT_IDS + 1
+				ENDIF
+		OF 204661795.00:
+			IF ( CE.RESULT_VAL = "Yes" )
+					 PFID->XORD[XID].PARENT_EVT_IDS = PFID->XORD[XID].PARENT_EVT_IDS + 1
+			ENDIF
+		ENDCASE
+	WITH orahintcbo("index(CE  XIE1CLINICAL_EVENT)"), NOCOUNTER, TIME = 49
+ 
+ 	IF ($FUNCOPER = 1 )
+	    SELECT INTO "nl:"
+	         XID      = PFID->XORD[D1.SEQ].ITEMID
+	    FROM
+	        (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+	    WHERE PFID->XORD[D1.SEQ].PARENT_EVT_IDS >1
+	  	  AND PFID->XORD[D1.SEQ].ACTIVEIND = 1
+	    DETAIL
+	         PFID->XORD[XID].EXCLUD_FLAG = 35
+	    WITH NOCOUNTER, TIME =32
+    ENDIF
+    IF ($FUNCOPER = 9 )
+    	SET RPTDATA.PROTSTAT = "COMPLETE"
+    ENDIF
+END ;SUBROUTINE END
+;===============================================================================
+SUBROUTINE    SRPFACTIVE (PID ,EID, SORDIDX)
+ 
+	IF (PID > 0)
+		SELECT  INTO "nl:"
+				CE.EVENT_CD
+				,CE.EVENT_END_DT_TM
+				,CE.RESULT_VAL
+		FROM
+			  CLINICAL_EVENT  CE
+		WHERE CE.parent_event_id = PID
+			AND CE.VALID_UNTIL_DT_TM =CNVTDATETIME("31-DEC-2100 00:00:00")
+			AND CE.ENCNTR_ID = EID
+			AND CE.EVENT_CD IN (
+				 204661737,
+				 204661752,
+				 204661795,
+				 204661838,
+				 204661863,
+				 204661907
+			 )
+			AND CE.VALID_UNTIL_DT_TM =CNVTDATETIME("31-DEC-2100 00:00:00")
+			AND CE.PUBLISH_FLAG =1
+			AND CE.RESULT_STATUS_CD IN (ATHRSLTSTCD, ALTRSLSTCD, MODRSLSTCD); (35,25,34)
+			AND CE.EVENT_TAG!="Date\Time Correction"
+ 
+		ORDER
+			CE.EVENT_CD
+			, CE.EVENT_END_DT_TM   DESC
+ 
+		DETAIL
+			CASE (CE.event_cd)
+			OF 204661712.00:
+				IF ( CE.RESULT_VAL != patstring("No " ))
+					RPTDATA -> ORDERS[SORDIDX] -> MODIFY_FLAG     = "Yes"
+					RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STATUS =
+						BUILD(RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STATUS,"|Exam Protocol")
+					IF (RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STAT_LVL < 2)
+						RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STAT_LVL= 2
+					ENDIF
+				ENDIF
+			OF 204661795.00:
+				IF ( CE.RESULT_VAL = "Yes" )
+					RPTDATA -> ORDERS[SORDIDX] -> MODIFY_FLAG     = "Yes"
+					RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STATUS =
+						BUILD(RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STATUS,"|Nurse Practitioner")
+					IF (RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STAT_LVL < 3)
+						RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STAT_LVL= 3
+					ENDIF
+				ENDIF
+			OF 204661737.00:
+				IF ( CE.RESULT_VAL = "Yes" )
+					RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STATUS =
+						BUILD(RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STATUS,"|Nurse Tech")
+					IF (RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STAT_LVL < 5)
+						RPTDATA -> ORDERS[SORDIDX] -> PROTOCAL_STAT_LVL= 5
+					ENDIF
+				ENDIF
+			OF 204661907.00:
+				RPTDATA -> ORDERS[SORDIDX] -> ALERT_FLAG = CE.RESULT_VAL
+			ENDCASE
+		WITH orahintcbo("index(CE  XIE1CLINICAL_EVENT)"), NOCOUNTER, TIME = 49
+	ENDIF
+END ;SUBROUTINE END
+;===============================================================================
+SUBROUTINE    SRPF (PID ,EID, SORDIDX)
+ 
+	IF (PID > 0)
+		SELECT  INTO "nl:"
+				CE.EVENT_CD,
+				CE.EVENT_END_DT_TM
+				,CE.RESULT_VAL
+		FROM
+			  CLINICAL_EVENT  CE
+		WHERE CE.parent_event_id = PID
+			AND CE.VALID_UNTIL_DT_TM =CNVTDATETIME("31-DEC-2100 00:00:00")
+			AND CE.ENCNTR_ID = EID
+			AND CE.EVENT_CD IN (
+				 204661631,
+				 204661712,
+				 204661726,
+				 204661737,
+				 204661752,
+				 204661795,
+				 204661808,
+				 204661821,
+				 204661838,
+				 204661863,
+				 204661874,
+				 204661885,
+				 204661907,
+				 204661996,
+				 204661983,
+				 204662008,
+				 204662092,
+				 204662103,
+				 204662116,
+				 605804707,
+				 605805055,
+				 605805111,
+				 605805343,
+				 605805421,
+				 605805547,
+				 1549051067,
+				 1549051097,
+				 1549051127,
+				 1549051163,
+				 1549051193,
+				 1549051227,
+				 1617574335
+			)
+			AND CE.PUBLISH_FLAG =1
+			AND CE.RESULT_STATUS_CD IN (ATHRSLTSTCD, ALTRSLSTCD, MODRSLSTCD); (35,25,34)
+			AND CE.EVENT_TAG!="Date\Time Correction"
+ 
+			ORDER
+				CE.EVENT_CD
+				, CE.EVENT_END_DT_TM   DESC
+ 
+			DETAIL
+				CASE (CE.event_cd)
+				OF 204661631.00:
+					PFID -> XORD[SORDIDX] ->EPHOLDSPECPROTOCOL  = CE.RESULT_VAL
+					PFID -> XORD[SORDIDX] ->EPHOLDSPECPROTOCOLID = CE.UPDT_ID
+				OF 204661712.00:
+						PFID -> XORD[SORDIDX] ->RADIOLOGID= CE.UPDT_ID
+						IF ( CE.RESULT_VAL = patstring("No *" ))
+							PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS = PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS
+						   PFID -> XORD[SORDIDX] -> EP2HOLDSTATUS =
+							  BUILD(FORMAT(CE.EVENT_END_DT_TM,"MM/DD/YYYY HH:MM;;Q"),"|",CE.EVENT_TAG)
+						   PFID -> XORD[SORDIDX]-> EP2HOLDSTATUSID = CE.UPDT_ID
+						   PFID -> XORD[SORDIDX]-> PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+						ELSEIF ( CE.RESULT_VAL = patstring("*no changes" ))
+							PFID -> XORD[SORDIDX] ->EPHOLDSTATUS = ""
+							PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS =
+								BUILD(PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS,"|Exam Protocol")
+							PFID -> XORD[SORDIDX] ->EP_PROTOCOLSTATUS = "Exam Protocol"
+							PFID -> XORD[SORDIDX]-> PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+							IF (PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL < 2)
+								  PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL = 2
+							ENDIF
+						ELSEIF ( CE.RESULT_VAL = patstring("*with modified contrast change" ))
+							PFID -> XORD[SORDIDX] ->EPREORDERFLAG = "Yes"
+							PFID -> XORD[SORDIDX] ->EPHOLDSTATUS = ""
+							PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS =
+								BUILD(PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS,"|Exam Protocol")
+							PFID -> XORD[SORDIDX] ->EP_PROTOCOLSTATUS = "Exam Protocol"
+							PFID -> XORD[SORDIDX]-> PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+							IF (PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL < 2)
+								  PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL = 2
+							ENDIF
+						IF (PFID-> XORD[SORDIDX]->RELINKFLAG = "RELINK" OR PFID-> XORD[SORDIDX]->ORDSTATE_CD = 1)
+								PFID -> XORD[SORDIDX] ->EPREORDERFLAG = "DONE"
+							ENDIF
+						ENDIF
+				OF 204661795.00:
+					IF ( CE.RESULT_VAL = "Yes" )
+						 PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS=
+							BUILD(PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS,"|Nurse Practitioner")
+						 PFID -> XORD[SORDIDX]-> PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+						 IF (PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL < 3)
+							   PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL = 3
+						 ENDIF
+					ENDIF
+				OF 204661737.00:
+					IF ( CE.RESULT_VAL = "Yes" )
+						PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS=
+							BUILD(PFID -> XORD[SORDIDX] ->PROTOCOLSTATUS,"|Nurse Tech")
+						PFID -> XORD[SORDIDX]-> PROTDATEMODIFIED = FORMAT(CE.UPDT_DT_TM, "MM/DD/YY HH:MM")
+						 IF (PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL < 5)
+							   PFID -> XORD[SORDIDX] -> PROTOCOLSTATLVL = 5
+						 ENDIF
+					ENDIF
+				OF 1549051163.00:
+				  PFID -> XORD[SORDIDX] -> RADIOLOGISTPRIORITY = CE.RESULT_VAL
+				OF 204661907.00:
+					PFID -> XORD[SORDIDX] ->ALERTFLAG = CE.RESULT_VAL
+				OF 204661996.00:
+				  PFID -> XORD[SORDIDX] -> EPREORDERCHGS  =
+					 BUILD(PFID -> XORD[SORDIDX] -> EPREORDERCHGS, "|",
+						TRIM( CE.EVENT_TITLE_TEXT)," (", TRIM( CE.EVENT_TAG),") " )
+ 
+				OF 204661983.00:
+				OF 204662008.00:
+				  PFID -> XORD[SORDIDX] -> EPREORDERCHGS  =
+					 BUILD(PFID -> XORD[SORDIDX] -> EPREORDERCHGS, "|",
+						TRIM( CE.EVENT_TITLE_TEXT)," (", TRIM( CE.EVENT_TAG),") " )
+ 
+				OF 605804707.00:
+				OF 605805055.00:
+				  PFID -> XORD[SORDIDX] -> EPREORDERCHGS  =
+					BUILD(PFID -> XORD[SORDIDX] -> EPREORDERCHGS, "|",
+					 TRIM( CE.EVENT_TITLE_TEXT)," (", TRIM( CE.EVENT_TAG),") " )
+ 
+				OF 605805111.00:
+				OF 605805343.00:
+				  PFID -> XORD[SORDIDX] -> EPREORDERCHGS  =
+					 BUILD(PFID -> XORD[SORDIDX] -> EPREORDERCHGS, "|",
+						TRIM( CE.EVENT_TITLE_TEXT)," (", TRIM( CE.EVENT_TAG),") " )
+ 
+				OF 605805421.00:
+				  PFID -> XORD[SORDIDX] -> EPREORDERCHGS  =
+					BUILD(PFID -> XORD[SORDIDX] -> EPREORDERCHGS, "|",
+					  TRIM( CE.EVENT_TITLE_TEXT)," (", TRIM( CE.EVENT_TAG),") " )
+ 
+				OF 605805547.00:
+				  PFID -> XORD[SORDIDX] -> EPREORDERCHGS  =
+					 BUILD(PFID -> XORD[SORDIDX] -> EPREORDERCHGS, "|",
+					   TRIM( CE.EVENT_TITLE_TEXT)," (", TRIM( CE.EVENT_TAG),") " )
+				OF 1617574335.00:
+					PFID -> XORD[SORDIDX] -> NP_CLR  = BUILD(FORMAT(
+											CE.EVENT_END_DT_TM,"MM/DD/YYYY HH:MM;;Q"),"|",CE.EVENT_TAG)
+					PFID -> XORD[SORDIDX] -> NPCLRID  = CE.UPDT_ID
+				OF 1549051067.00:
+				   PFID -> XORD[SORDIDX] -> EPHOLDSTATUS =
+					  BUILD(FORMAT(CE.EVENT_END_DT_TM,"MM/DD/YYYY HH:MM;;Q"),"|",CE.EVENT_TAG)
+				   PFID -> XORD[SORDIDX]-> EPHOLDSTATUSID = CE.updt_id
+				OF 1549051097.00:
+				  PFID -> XORD[SORDIDX] -> NPHOLDSTATUS =
+					  BUILD(FORMAT(CE.EVENT_END_DT_TM,"MM/DD/YYYY HH:MM;;Q"),"|",CE.EVENT_TAG)
+				  PFID -> XORD[SORDIDX] -> NPHOLDSTATUSID = CE.UPDT_ID
+				OF 1549051127.00:
+				  PFID -> XORD[SORDIDX] -> NPHOLDCMT =
+					   BUILD(FORMAT(CE.EVENT_END_DT_TM,"MM/DD/YYYY HH:MM;;Q"),"|",CE.EVENT_TAG)
+				  PFID -> XORD[SORDIDX] -> NPHOLDCMTID = CE.UPDT_ID
+				OF 204662092.00:
+				  PFID -> XORD[SORDIDX] -> EPMODIFYCMT =
+					   BUILD(FORMAT(CE.EVENT_END_DT_TM,"MM/DD/YYYY HH:MM;;Q"),"|",CE.EVENT_TAG)
+				  PFID -> XORD[SORDIDX] -> EPMODIFYCMTID = CE.UPDT_ID
+				OF 204662103.00:
+				  PFID -> XORD[SORDIDX] -> NPMODIFYCMT =
+						BUILD(FORMAT(CE.EVENT_END_DT_TM,"MM/DD/YYYY HH:MM;;Q"),"|",CE.EVENT_TAG)
+				  PFID -> XORD[SORDIDX] -> NPMODIFYCMTID = CE.UPDT_ID
+				ENDCASE
+			WITH orahintcbo("index(CE  XIE1CLINICAL_EVENT)"), NOCOUNTER, TIME = 49
+		ENDIF
+END ;SUBROUTINE END
+;===============================================================================
+SUBROUTINE   SRLDFOCLNDAT(IDX)
+ 
+    SELECT  INTO "nl:"
+    FROM
+      ENCOUNTER  E
+      ,CLINICAL_EVENT CE
+      PLAN (E
+        WHERE (E.ENCNTR_ID= PFID -> XORD[IDX] ->ORIGENCTRID))
+      AND (CE
+      	WHERE (CE.EVENT_CD IN (MEDCALWTCD, ROUTWTCD, HTCD))
+          AND (CE.PERSON_ID=E.PERSON_ID)
+          AND (CE.ENCNTR_ID=E.ENCNTR_ID)
+          AND (CE.VALID_UNTIL_DT_TM= CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+          AND (CE.EVENT_END_DT_TM>=E.REG_DT_TM)
+          AND (CE.VIEW_LEVEL=1)
+          AND (CE.PUBLISH_FLAG=1 )
+   			  AND (CE.RESULT_STATUS_CD IN (ATHRSLTSTCD, ALTRSLSTCD, MODRSLSTCD))
+          AND (CE.EVENT_TAG!="Date\Time Correction"))
+      ORDER BY
+          CE.EVENT_CD
+          , CE.EVENT_END_DT_TM DESC
+ 
+    HEAD CE.EVENT_CD
+      IF (CE.EVENT_CD= MEDCALWTCD)
+        PFID -> XORD[IDX] -> WEIGHT =CE.RESULT_VAL
+      ELSEIF (CE.EVENT_CD= HTCD)
+        PFID -> XORD[IDX] -> HEIGHT =CE.RESULT_VAL
+      ENDIF
+    WITH orahintcbo("index(ce XIE9CLINICAL_EVENT)"), NOCOUNTER
+ 
+END ;SUBROUTINE END
+;===============================================================================
+SUBROUTINE   SRLDAOCLNDAT (NULL)
+ 
+DECLARE LPIDX = I4
+DECLARE RADCMTTAB_ID = F8
+DECLARE EPID = F8
+DECLARE PID = F8
+DECLARE EID = F8
+ 
+    FOR ( LPIDX = 1 TO RPTDATA->ORDER_CNT )
+        SET PID = RPTDATA -> ORDERS[LPIDX] ->PID
+        SET EPID = RPTDATA -> ORDERS[LPIDX] ->EPID
+        SET EID = RPTDATA -> ORDERS[LPIDX] ->ORGENCNTRID
+        SELECT  INTO "nl:"
+        FROM ENCOUNTER  E,
+          CLINICAL_EVENT CE
+          PLAN (E
+            WHERE (E.ENCNTR_ID= RPTDATA -> ORDERS[LPIDX] -> ENCNTRID))
+          AND (CE
+            WHERE (CE.EVENT_CD IN (MEDCALWTCD, ROUTWTCD, HTCD, PRECCD, PROTSTCD, ALTFLGCD     ))
+              AND (CE.PERSON_ID=E.PERSON_ID)
+              AND (CE.ENCNTR_ID=E.ENCNTR_ID)
+              AND (CE.VALID_UNTIL_DT_TM= CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+              AND (CE.EVENT_END_DT_TM>=E.REG_DT_TM)
+              AND (CE.VIEW_LEVEL=1)
+              AND (CE.PUBLISH_FLAG=1 )
+              AND (CE.RESULT_STATUS_CD IN (ATHRSLTSTCD, ALTRSLSTCD, MODRSLSTCD))
+              AND (CE.EVENT_TAG!="Date\Time Correction"))
+          ORDER BY CE.EVENT_CD, CE.EVENT_END_DT_TM DESC
+ 
+        HEAD CE.EVENT_CD
+          IF (CE.EVENT_CD= MEDCALWTCD)
+            RPTDATA -> ORDERS[LPIDX] -> WEIGHT =CE.RESULT_VAL
+          ELSEIF (CE.EVENT_CD= PRECCD)
+            RPTDATA -> ORDERS[LPIDX] -> ISOLATION =CE.EVENT_TAG
+          ELSEIF (CE.EVENT_CD= HTCD)
+            RPTDATA -> ORDERS[LPIDX] -> HEIGHT =CE.RESULT_VAL
+          ENDIF
+        WITH orahintcbo("index(ce XIE9CLINICAL_EVENT)"), NOCOUNTER
+ 
+        SELECT INTO "nl:"
+        FROM
+          dcp_forms_activity dfa,
+            task_activity ta
+          PLAN dfa
+            WHERE dfa.encntr_id = RPTDATA -> ORDERS [ LPIDX ]-> ENCNTRID
+              AND dfa.form_dt_tm > CNVTDATETIME (RPTDATA -> ORDERS [ LPIDX ]-> DATE_ORDERED_DQ8) - 1
+              AND dfa.description = "Contrast Screening and Administration Form"
+          JOIN ta
+            where ta.task_id = dfa.task_id
+          ORDER BY dfa.form_dt_tm DESC
+ 
+        HEAD dfa.form_dt_tm
+          RPTDATA -> ORDERS [ LPIDX ]-> CSA_SIGNED = dfa.flags
+          ,RPTDATA -> ORDERS [ LPIDX ]-> CSA_SIGNED_DT = FORMAT(dfa.form_dt_tm, "@SHORTDATETIME")
+          ,RPTDATA -> ORDERS [ LPIDX ]-> CSA_FORM_ACTIVITY_ID = dfa.dcp_forms_activity_id
+          ,RPTDATA -> ORDERS [ LPIDX ]-> CSA_EXAM_FORM_ID = dfa.dcp_forms_ref_id
+        WITH orahintcbo("index(e XFK6DCP_FORMS_ACTIVITY)"), NOCOUNTER, maxrec = 1
+ 
+        SELECT INTO "nl:"
+           C.EVENT_TAG
+          , C.CLINICAL_Event_ID
+          , D.DCP_FORMS_ACTIVITY_ID
+          , D.DCP_FORMS_REF_ID
+ 
+        FROM
+          CLINICAL_EVENT   C
+          , DCP_FORMS_ACTIVITY   D
+          , DCP_FORMS_REF   DF
+ 
+        PLAN C
+          WHERE  C.ENCNTR_ID = RPTDATA -> ORDERS [ LPIDX ]-> ENCNTRID
+            AND C.VALID_UNTIL_DT_TM  = CNVTDATETIME("31-DEC-2100 00:00:00")
+            AND C.EVENT_CD IN (
+           IVCTRSTL24h_CD
+            ,REACTCNTRST_CD
+            ,PHEOTUMOR_CD
+            ,GLUCOFORMIN_CD
+            ,SICKLECELL_CD
+            ,HEARTFAILURE_CD
+            ,SMLBWELTRANS_CD
+            ,ORDENCIDCD
+            ,KIDNEYPRBLMS_CD
+            ,DIALYSIS_CD
+            ,RADMETHTRXATE_CD
+            ,RADCISPLATIN_CD
+            ,ASTHMAHISTORY_CD
+        )
+        AND C.EVENT_TAG = "Yes"
+        JOIN D
+              WHERE  D.ENCNTR_ID = C.ENCNTR_ID
+        			AND D.ACTIVE_IND =1
+        JOIN DF
+              WHERE DF.DCP_FORMS_REF_ID = D.DCP_FORMS_REF_ID
+              AND DF.DCP_FORMS_REF_ID = 297727999.00
+              AND DF.ACTIVE_IND = 1
+ 
+        ORDER BY
+            D.DCP_FORMS_ACTIVITY_ID DESC
+ 
+        DETAIL
+               RPTDATA -> ORDERS [ LPIDX ]-> CSA_CONTRIND = 1
+              ,RPTDATA -> ORDERS [ LPIDX ]-> CSA_CTRIND_FORM_ACT_ID = D.DCP_FORMS_ACTIVITY_ID
+              ,RPTDATA -> ORDERS [ LPIDX ]-> CSA_CTRIND_FORM_ID = D.DCP_FORMS_REF_ID
+        WITH MAXREC = 1, NOCOUNTER
+ 
+        CALL SRPFACTIVE (EPID, EID ,LPIDX)
+ 
+		SELECT INTO "nl:"
+		FROM
+			CLINICAL_EVENT   CE
+ 
+		WHERE  CE.ENCNTR_ID = EID
+			AND CE.PARENT_EVENT_ID = PID
+			AND CE.EVENT_CD = 11895.00
+			AND (CE.VALID_UNTIL_DT_TM = CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+		DETAIL
+			IF (CE.EVENT_TITLE_TEXT = "Worklist Comments")
+				RADCMTTAB_ID = CE.EVENT_ID
+			ENDIF
+		WITH NOCOUNTER, SEPARATOR=" ", FORMAT, TIME = 60
+ 
+        IF (RADCMTTAB_ID > 0)
+            SELECT INTO  "nl:"
+                  C.EVENT_ID,
+                  C.COMPRESSION_CD,
+                  C.BLOB_LENGTH,
+                  C.BLOB_CONTENTS,
+                  CE.EVENT_CD
+            FROM
+                CLINICAL_EVENT CE,
+                  ce_blob c
+ 
+            PLAN CE
+              WHERE  CE.ENCNTR_ID = EID
+                AND (CE.VALID_UNTIL_DT_TM= CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+                AND CE.parent_event_id = RADCMTTAB_ID
+            JOIN C
+                WHERE C.EVENT_ID = CE.EVENT_ID
+                AND (C.VALID_UNTIL_DT_TM = CNVTDATETIME ("31-DEC-2100 00:00:00" ))
+ 
+            ORDER
+                  CE.UPDT_DT_TM   DESC
+                  ,C.VALID_UNTIL_DT_TM DESC
+ 
+            DETAIL
+                  BLBOUT = NOTRIM(FILLSTRING(32768," "))
+                  BLBNORTF = NOTRIM(FILLSTRING(32768," "))
+ 
+                  IF(C.COMPRESSION_CD = OCFCOMP)
+                     UNCOMPSIZE = 0
+                     BLB_UN  = UAR_OCF_UNCOMPRESS (C.BLOB_CONTENTS, C.BLOB_LENGTH,
+                                   BLBOUT, SIZE( BLBOUT ), UNCOMPSIZE)
+ 
+                     STAT = UAR_RTF2(BLBOUT,UNCOMPSIZE, BLBNORTF,SIZE(BLBNORTF),BSIZE,0)
+                     BLBNORTF = SUBSTRING(1,BSIZE,BLBNORTF)
+                   ELSE
+                     BLBNORTF = C.BLOB_CONTENTS
+                   ENDIF,
+                   RPTDATA -> ORDERS [ LPIDX ]-> RAD_COMMENTS =  BLBNORTF
+            WITH orahintcbo("index(ce XIE28CLINICAL_EVENT)"), NOCOUNTER,  TIME = 23
+        ENDIF
+    ENDFOR
+ 
+	SELECT
+        XID       = D1.SEQ
+	FROM
+		ORDER_DETAIL   OD
+		, (DUMMYT   D1  WITH SEQ = VALUE(SIZE(RPTDATA->ORDERS, 5)))
+ 
+	PLAN D1
+	JOIN OD
+		WHERE OD.ORDER_ID =  RPTDATA -> ORDERS[D1.SEQ] -> ORDERID
+		  AND OD.OE_FIELD_ID IN (
+			 76951547.00
+			 ,387761448.00
+			)
+		AND OD.OE_FIELD_DISPLAY_VALUE != PATSTRING("Awake")
+ 
+	ORDER
+		OD.ORDER_ID
+		, OD.OE_FIELD_ID
+		, OD.ACTION_SEQUENCE   DESC
+ 
+	HEAD  OD.ORDER_ID
+		CASE ( OD.oe_field_id)
+		OF 76951547.00:
+			RPTDATA -> ORDERS[XID]->SEDATION = BUILD(OD.OE_FIELD_DISPLAY_VALUE)
+		OF 387761448.00:
+			RPTDATA -> ORDERS[XID]->RAD_DISCRETION = BUILD(OD.OE_FIELD_DISPLAY_VALUE)
+		ENDCASE
+ 
+	WITH orahintcbo("index(od XPKORDER_DETAIL$C)"),   NOCOUNTER, TIME = 31
+END ;SUBROUTINE
+;===============================================================================
+SUBROUTINE   SRLDRETDAT  ( NULL)
+ 
+DECLARE RPTIDX  = I4
+ 
+	SELECT INTO "nl:"
+		XORD_EXCLUD_FLAG        = PFID->XORD[D1.SEQ].EXCLUD_FLAG
+		, XORD_ORDERID          = PFID->XORD[D1.SEQ].ORDERID
+		, XORD_RADORDID         = PFID->XORD[D1.SEQ].RADORDID
+		, XORD_CHGRADORDID      = PFID->XORD[D1.SEQ].CHGRADORDID
+		, XORD_PERSONID         = PFID->XORD[D1.SEQ].PERSONID
+		, XORD_PFORMID          = PFID->XORD[D1.SEQ].PFORMID
+		, XORD_ENCTR_ID         = PFID->XORD[D1.SEQ].ENCTR_ID
+		, XORD_ORIGENCTRID      = PFID->XORD[D1.SEQ].ORIGENCTRID
+		, XORD_ORDERPROVID      = PFID->XORD[D1.SEQ].ORDERPROVIDER
+		, XORD_EXAMFORMID       = PFID->XORD[D1.SEQ].EXAMFORMID
+		, XORD_PROTOCOLSTATLVL  = PFID->XORD[D1.SEQ].PROTOCOLSTATLVL
+		, XORD_MODTYPE          = PFID->XORD[D1.SEQ].MODTYPE
+		, XORD_EPREORDERDAYS    = PFID->XORD[D1.SEQ].EPREORDERDAYS
+		, XORD_CATALOG_CD       = PFID->XORD[D1.SEQ].CATALOG_CD
+		, XORD_SUBTYPE_CD       = PFID->XORD[D1.SEQ].SUBTYPE_CD
+		, XORD_NOPFORMID        = PFID->XORD[D1.SEQ].NOPFORMID
+		, XORD_RELINKORDERID    = PFID->XORD[D1.SEQ].RELINKORDERID
+		, XORD_ORDERCMTS        = PFID->XORD[D1.SEQ].ORDERCMTS
+		, XORD_RELINKORDERNOTE  = PFID->XORD[D1.SEQ].RELINKORDERNOTE
+		, XORD_GROUP_PFID       = PFID->XORD[D1.SEQ].GROUP_PFID
+		, XORD_PETORDER         = PFID->XORD[D1.SEQ].XPETORDER
+		, XORD_SCH_EVTID        = PFID->XORD[D1.SEQ].SCH_EVTID
+		, XORD_ARIND            = PFID->XORD[D1.SEQ].ARIND
+		, XORD_RADCOMMENTS      = PFID->XORD[D1.SEQ].RADCOMMENTS
+		, XORD_ORDSTATUS        = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].ORDSTATUS)
+		, XORD_XREQSTARTDTTM    = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].XREQSTARTDTTM)
+		, XORD_XSTOPDTTM        = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].XSTOPDTTM)
+		, XORD_XEXPIREDTTM      = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].XEXPIREDTTM)
+		, XORD_REQSTARTDTTM     = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].REQSTARTDTTM)
+		, XORD_STOPDTTM         = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].STOPDTTM)
+		, XORD_EXPIREDTTM       = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].EXPIREDTTM)
+		, XORD_PROTOCOLSTATUS   = SUBSTRING(1, 200, PFID->XORD[D1.SEQ].PROTOCOLSTATUS)
+		, XORD_ORDERLOC         = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].ORDERLOC)
+		, XORD_ORDERPRIORITY    = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].ORDERPRIORITY)
+		, XORD_DATEORDER        = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].DATEORDER)
+		, XORD_ORDERDESC        = SUBSTRING(1, 200, PFID->XORD[D1.SEQ].ORDERDESC)
+		, XORD_ORDERPROVNAME    = SUBSTRING(1, 100,PFID->XORD[D1.SEQ].ORDERPROVIDERNAME)
+		, XORD_MODIFYFLAG       = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].MODIFYFLAG)
+		, XORD_PROTDATEMODIFIED = SUBSTRING(1,100, PFID->XORD[D1.SEQ].PROTDATEMODIFIED)
+		, XORD_DEPTORDSTATUS    = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].DEPTORDSTATUS)
+		, XORD_SEDATIONTYPE     = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].SEDATIONTYPE)
+		, XORD_RADDISCRETION    = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].RADDISCRETION)
+		, XORD_CLNDISPLINE      = SUBSTRING(1,255, PFID->XORD[D1.SEQ].CLNDISPLINE)
+		, XORD_ORIGORDDT        = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].ORIGORDDT)
+		, XORD_EPHOLDSTATUS     = SUBSTRING(1,300, PFID->XORD[D1.SEQ].EPHOLDSTATUS)
+		, XORD_EPHOLDSTATNAME   = SUBSTRING(1,100,  PFID->XORD[D1.SEQ].EPHOLDSTATNAME)
+		, XORD_EP2HOLDSTATUS    = SUBSTRING(1,300, PFID->XORD[D1.SEQ].EP2HOLDSTATUS)
+		, XORD_EP2HOLDSTATNAME  = SUBSTRING(1,100,  PFID->XORD[D1.SEQ].EP2HOLDSTATNAME)
+		, XORD_EPMODIFYCMT      = SUBSTRING(1,500,  PFID->XORD[D1.SEQ].EPMODIFYCMT)
+		, XORD_NPCLR            = SUBSTRING(1,500,  PFID->XORD[D1.SEQ].NP_CLR)
+		, XORD_NPCLRNAME        = SUBSTRING(1,500,  PFID->XORD[D1.SEQ].NPCLRNAME)
+		, XORD_EPMODIFYCMTNAME  = SUBSTRING(1,100,  PFID->XORD[D1.SEQ].EPMODIFYCMTNAME)
+		, XORD_EPHOLDSPECPROT   = SUBSTRING(1,300, PFID -> XORD[D1.SEQ].EPHOLDSPECPROTOCOL)
+		, XORD_EPHOLDSPECPROTNM = SUBSTRING(1,100, PFID -> XORD[D1.SEQ].EPHOLDSPECPROTOCOLNM)
+		, XORD_EPREORDERFLAG    = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].EPREORDERFLAG)
+		, XORD_EPREORDERCHGS    = SUBSTRING(1,500, PFID->XORD[D1.SEQ].EPREORDERCHGS)
+		, XORD_ODDIAGNOSIS      = SUBSTRING(1,1000, PFID->XORD[D1.SEQ].ODDIAGNOSIS)
+		, XORD_PREGNANT         = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].PREGNANT)
+		, XORD_CLININFO         = SUBSTRING(1,500, PFID->XORD[D1.SEQ].CLININFO)
+		, XORD_FUTUREORD        = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].FUTUREORD)
+		, XORD_ALERTFLAG        = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].ALERTFLAG)
+		, XORD_NAME_FULL_FMT    = SUBSTRING(1, 100, PFID->XORD[D1.SEQ].NAME_FULL_FMT)
+		, XORD_MRN              = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].MRN)
+		, XORD_DOB              = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].DOB)
+		, XORD_AGE              = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].AGE)
+		, XORD_WEIGHT           = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].WEIGHT)
+		, XORD_HEIGHT           = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].HEIGHT)
+		, XORD_RADPRIORITY      = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].RADIOLOGISTPRIORITY)
+		, XORD_RADIOLOGISTNAME  = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].RADIOLOGISTNAME)
+		, XORD_NPHOLDCMT        = SUBSTRING(1,500, PFID->XORD[D1.SEQ].NPHOLDCMT)
+		, XORD_NPHOLDSTATUS     = SUBSTRING(1,300, PFID->XORD[D1.SEQ].NPHOLDSTATUS)
+		, XORD_NPHOLDSTATNAME   = SUBSTRING(1,100,  PFID->XORD[D1.SEQ].NPHOLDSTATNAME)
+		, XORD_NPHOLDCMTNAME    = SUBSTRING(1,100, PFID->XORD[D1.SEQ].NPHOLDCMTNAME)
+		, XORD_NPMODIFYCMT      = SUBSTRING(1,500, PFID->XORD[D1.SEQ].NPMODIFYCMT)
+		, XORD_NPMODIFYCMTNAME  = SUBSTRING(1,100,  PFID->XORD[D1.SEQ].NPMODIFYCMTNAME)
+		, XORD_RELINKFLAG       = SUBSTRING(1, 30, PFID->XORD[D1.SEQ].RELINKFLAG)
+ 
+    FROM
+        (DUMMYT   D1  WITH SEQ = VALUE(SIZE(PFID->XORD, 5)))
+ 
+    PLAN D1
+    WHERE PFID->XORD[D1.SEQ].EXCLUD_FLAG = 2
+    ORDER BY
+        PFID->XORD[D1.SEQ].MODTYPE
+ 
+    DETAIL
+		RPTDATA -> SCHORDER_CNT = RPTDATA -> SCHORDER_CNT + 1
+		,RPTIDX = RPTDATA -> SCHORDER_CNT
+		,STAT = ALTERLIST ( RPTDATA -> SCHORDERS ,  RPTIDX)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EXCLUD_FLAG            = XORD_EXCLUD_FLAG
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORDERID                = XORD_ORDERID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> PRIORITY               = TRIM(XORD_ORDERPRIORITY)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ENCNTRID               = XORD_ORIGENCTRID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> PERSONID               = XORD_PERSONID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> MRN                    = TRIM(XORD_MRN)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NAME_FULL_FORMATTED    = TRIM(XORD_NAME_FULL_FMT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> DOB                    = TRIM(XORD_DOB)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> AGE                    = TRIM(XORD_AGE)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORDER_LOC              = TRIM(XORD_ORDERLOC)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> BEGIN_DT               = TRIM(XORD_XREQSTARTDTTM)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> END_DT                 = TRIM(XORD_XSTOPDTTM)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EXPIRE_DT              = TRIM(XORD_XEXPIREDTTM)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> DATE_ORDERED           = TRIM(XORD_DATEORDER)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> DATE_REQUESTED         = TRIM(XORD_REQSTARTDTTM)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORDER_DESC             = TRIM(XORD_ORDERDESC)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORDER_PROVIDER         = TRIM(XORD_ORDERPROVNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> DEPT_STATUS            = TRIM(XORD_DEPTORDSTATUS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORDER_STATUS           = TRIM(XORD_ORDSTATUS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> PROTOCAL_STATUS        = TRIM(XORD_PROTOCOLSTATUS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> PROTOCAL_STAT_LVL      = XORD_PROTOCOLSTATLVL
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORDER_CLIN_DISP_LINE   = TRIM(XORD_CLNDISPLINE)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ALERT_FLAG             = TRIM(XORD_ALERTFLAG)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> MODIFY_FLAG            = TRIM(XORD_MODIFYFLAG)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> PROTOCOL_DATE_MODIFIED = TRIM(XORD_PROTDATEMODIFIED)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> FORM_ACTIVITY_ID       = XORD_PFORMID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EXAM_FORM_ID           = XORD_EXAMFORMID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> MODTYPE                = XORD_MODTYPE
+		,RPTDATA -> SCHORDERS[RPTIDX] -> RAD_COMMENTS           = TRIM(XORD_RADCOMMENTS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_HOLD_STATUS         = TRIM(XORD_EPHOLDSTATUS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_HOLD_STATUSID       = TRIM(XORD_EPHOLDSTATNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_HOLD_STATUS2        = TRIM(XORD_EP2HOLDSTATUS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_HOLD_STATUSID2      = TRIM(XORD_EP2HOLDSTATNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_HOLD_SPEC_PROTOCOL  = TRIM(XORD_EPHOLDSPECPROT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_HOLD_SPEC_PROTOCOLID = TRIM(XORD_EPHOLDSPECPROTNM)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_REORDER_CHGS        = TRIM(XORD_EPREORDERCHGS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_REORDER_FLAG        = TRIM(XORD_EPREORDERFLAG)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> EP_REORDER_DAYS        = XORD_EPREORDERDAYS
+		,RPTDATA -> SCHORDERS[RPTIDX] -> RAD_DISCRETION         = TRIM(XORD_RADDISCRETION)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> SEDATION               = TRIM(XORD_SEDATIONTYPE)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ODDIAGNOSIS            = TRIM(XORD_ODDIAGNOSIS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> PREGNANT               = TRIM(XORD_PREGNANT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> CLININFO               = TRIM(XORD_CLININFO)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORIGORDDT              = TRIM(XORD_ORIGORDDT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> FUTUREORD              = TRIM(XORD_FUTUREORD)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> HEIGHT                 = TRIM(XORD_HEIGHT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> WEIGHT                 = TRIM(XORD_WEIGHT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> RAD_COMMENTS           = TRIM(XORD_RADCOMMENTS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> RADIOLOGIST_PRIORITY   = TRIM(XORD_RADPRIORITY)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_HOLD_STATUS         = TRIM(XORD_NPHOLDSTATUS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_HOLD_STATUSID       = TRIM(XORD_NPHOLDSTATNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_HOLD_CMT            = TRIM(XORD_NPHOLDCMT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_HOLD_CMTID          = TRIM(XORD_NPHOLDCMTNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_MODIFY_CMT          = TRIM(XORD_NPMODIFYCMT)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_MODIFY_CMTID        = TRIM(XORD_NPMODIFYCMTNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] ->RADIOLOGISTID           = TRIM(XORD_RADIOLOGISTNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> RELINKFLAG             = TRIM(XORD_RELINKFLAG)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_CLR                 = TRIM(XORD_NPCLR)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NP_CLRID               = TRIM(XORD_NPCLRNAME)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> CATALOG_CD             = XORD_CATALOG_CD
+		,RPTDATA -> SCHORDERS[RPTIDX] -> SUBTYPE_CD             = XORD_SUBTYPE_CD
+		,RPTDATA -> SCHORDERS[RPTIDX] -> NOPFORMID              = XORD_NOPFORMID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> RELINKORDERID  	    = XORD_RELINKORDERID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> ORDERCMTS              = TRIM(XORD_ORDERCMTS)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> RELINKORDERNOTE        = TRIM(XORD_RELINKORDERNOTE)
+		,RPTDATA -> SCHORDERS[RPTIDX] -> GROUP_PF_ID            =  XORD_GROUP_PFID
+		,RPTDATA -> SCHORDERS[RPTIDX] -> PETORDER               =  XORD_PETORDER
+		,RPTDATA -> SCHORDERS[RPTIDX] -> SCH_EVTID              =  XORD_SCH_EVTID
+		,RPTDATA -> SCHORDERS[RPTIDX]-> ARIND                   = XORD_ARIND
+        WITH NOCOUNTER, TIME = 32
+END ;SUBROUTINE END
+SUBROUTINE   SRUPTCTBL (IDX )
+	SELECT INTO "nl:"
+	FROM
+		CUST_OPRDWL_ORD C
+	WHERE C.ORDER_ID = CUSTORD->RORDER_ID
+	  AND C.ACTIVE_IND = CUSTORD->RACTIVE_IND
+	WITH NOCOUNTER
+ 
+    IF (CURQUAL > 0 )
+        IF ( IDX = 1 )
+			UPDATE INTO CUST_OPRDWL_ORD C
+				SET C.GRP_PF_ID      = CUSTORD->RGRP_PF_ID
+					;02.07.02
+					, C.PFORM_ID     = CUSTORD->RGRP_PF_ID
+					, C.ENCNTR_ID    = CUSTORD->RENCNTR_ID
+					, C.PF_CE_EVT_ID = CUSTORD->RPF_CE_EVT_ID
+					, C.EP_CE_EVT_ID = CUSTORD->REP_CE_EVT_ID
+			WHERE C.ORDER_ID = CUSTORD->RORDER_ID
+			  AND C.ACTIVE_IND = 1
+			WITH NOCOUNTER
+			COMMIT
+        ELSEIF ( IDX = 2 )
+			UPDATE INTO CUST_OPRDWL_ORD C
+				SET C.ACTIVE_IND = 13
+			WHERE C.GRP_PF_ID = CUSTORD->RGRP_PF_ID
+			  AND C.ACTIVE_IND = CUSTORD->RACTIVE_IND
+			WITH NOCOUNTER
+			COMMIT
+        ELSEIF ( IDX = 3 )
+			UPDATE INTO CUST_OPRDWL_ORD C
+                SET C.GRP_PF_ID      = CUSTORD->RGRP_PF_ID
+                	;02.07.02
+                	, C.PFORM_ID     = CUSTORD->RGRP_PF_ID
+                    , C.ENCNTR_ID    = CUSTORD->RENCNTR_ID
+                    , C.PF_CE_EVT_ID = CUSTORD->RPF_CE_EVT_ID
+                    , C.EP_CE_EVT_ID = CUSTORD->REP_CE_EVT_ID
+                    , C.ACTIVE_IND = 1
+            WHERE C.ORDER_ID = CUSTORD->RORDER_ID
+              AND C.ACTIVE_IND = 13 ;CUSTORD->RACTIVE_IND
+            WITH NOCOUNTER
+            COMMIT
+        ENDIF
+ 
+		IF (CURQUAL = 0 )
+			SET RPTDATA->ERR_STAT 		= "TRUE"
+			SET RPTDATA->ERR_DET_CNT 	= RPTDATA->ERR_DET_CNT + 1
+			SET STAT 					= ALTERLIST(RPTDATA->ERR_DETAIL, RPTDATA->ERR_DET_CNT)
+			SET RPTDATA->ERR_DETAIL[RPTDATA->ERR_DET_CNT].ERR_ITEM =
+				 BUILD(  "ERR -Update to Record in the CUST_OPRDWL_ORD table : ORDERID=" ,CUSTORD->RORDER_ID)
+		ENDIF
+    ELSE
+    ;: NO PREVIOUS RECORD
+		SET RPTDATA->ERR_STAT 		= "TRUE"
+		SET RPTDATA->ERR_DET_CNT 	= RPTDATA->ERR_DET_CNT + 1
+		SET STAT 					= ALTERLIST(RPTDATA->ERR_DETAIL, RPTDATA->ERR_DET_CNT)
+		SET RPTDATA->ERR_DETAIL[RPTDATA->ERR_DET_CNT].ERR_ITEM =
+			BUILD( "ERR - Update to non-existing record to the CUST_OPRDWL_ORD table : ORDERID=" ,CUSTORD->RORDER_ID)
+    ENDIF
+END ;SUBROUTINE
+ 
+;==================================================================================
+# EXIT_SCRIPT
+;==================================================================================
+ 
+IF (DEBUG_CTL_FLAG = 0 )
+    SET _Memory_Reply_String = CNVTRECTOJSON(RPTDATA)
+ENDIF
+ 
+# CLEAN_UP
+FREE RECORD PFID
+FREE RECORD RPTDATA
+FREE RECORD CUSTORD
+FREE RECORD ORDHIST
+FREE RECORD EAPPS_LG
+END
+GO
