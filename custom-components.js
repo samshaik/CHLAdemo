@@ -28525,7 +28525,7 @@ chla['keyinfo'].prototype.render = function() {
 					+ '</span></div></td>');
 			}
 
-			if (amb) { //OUTPATIENT_MEASURES
+			if (amb && OUTPATIENT_MEASURES != '') { //OUTPATIENT_MEASURES
             if (keyinfo.addColumnYN(viewType, colCnt)) {
                retVal.htmlRows.push('</tr><tr>');  
             }    
