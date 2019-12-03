@@ -3160,6 +3160,7 @@ div#chla_keyinfo span.pathway_important{
 }
 div#chla_keyinfo span.allergy-alert{
     color:red;
+    font-weight:bold;
 }
 div#chla_keyinfo span.diet-alert{
     color:#F00;
@@ -3284,20 +3285,14 @@ a.clickable-key-info-title:hover{
 .key-info-icon-column{
     vertical-align:top;
 }
-
-.key-info-hover:hover{
-    background-color:#fffce1;
-}
-
 .key-info-item{
     padding: 0px 5px 2px 0px;
 }
 .key-info-label{
-    color:#505050;
+    color:#000;
     font-weight:bold;
     padding-right:5px;
 }
-
 .key-info-label-no-padding{
     color:#000;
     font-weight:bold;
@@ -3313,6 +3308,7 @@ a.clickable-key-info-title:hover{
     padding-left:5px;
     vertical-align:top;
 }
+
 span.med-name-dose-noclick{
     font-weight:bold;
     cursor:default;
