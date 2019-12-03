@@ -13668,7 +13668,6 @@ chla.eApps.gFuncs.createFloatingPopupWindow = function (id, winTitle, innerHTML)
 		innerHTML;
 	$('#' + id).append(el);
 	var left = window.innerWidth/2 - ($('#' + id).width()/2) - 10;
-	alert(left);
 	$('#' + id).css('left', left);
 }
 
@@ -13798,32 +13797,24 @@ chla.eApps.gFuncs.bindFloatingHover = function (selector, appendTo, htmlStr, eva
 				}
 			} else {
 				el = $('<div>').append(htmlStr);
-				
 			}
 			var parentOffset = $(appendTo).offset();
-			var relX = e.pageX - parentOffset.left + 15 ;
-			
+			var relX = e.pageX - parentOffset.left + 15;
 			var relY = e.pageY - parentOffset.top;
-			var _bgcolor = bgcolor ? bgcolor : 'lightyellow';
+            var _bgcolor = bgcolor ? bgcolor : 'lightyellow';
 
 			el.appendTo(appendTo);
-			//el.prop('id', 'temp-hover').css('position', 'absolute').css('top', relY).css('left', relX)
-			//.css('padding', '3px').css('border', '1px solid black').css('background-color', _bgcolor).css('z-index', '36');
-			
-			el.prop('id', 'temp-hover').css('position', 'absolute').css('top', relY).css('left', relX-100)
+			el.prop('id', 'temp-hover').css('position', 'absolute').css('top', relY).css('left', relX)
 			.css('padding', '3px').css('border', '1px solid black').css('background-color', _bgcolor).css('z-index', '36');
 			
-			relX = e.pageX + parentOffset.left - 200
 			var hoverHeight = $('#temp-hover').height();
 			if(window.innerHeight - hoverHeight - relY < 0) {
-				
 				$('#temp-hover').css('top', relY - hoverHeight);
 			} else {
-				
 				$('#temp-hover').css('top', relY);
 			}
 			//$('#temp-hover td').css('background-color', _bgcolor);
-		}, function(e) { 
+		}, function(e) {
 			$('#temp-hover').remove();
 		}
 	);
@@ -18612,7 +18603,7 @@ chla.HemOncNotes.prototype.render = function() {
 //::---------------------------------------------------------------------------
 
 
-//Clinical Links on Handoff/PeriOp Workflow
+//Withdrawal Prevention Protocol
 chla.wpp = function () { };
 chla.wpp.prototype = new MPage.Component();
 chla.wpp.prototype.constructor = MPage.Component;
@@ -24250,7 +24241,7 @@ chla['btresponse'].prototype.render = function(){
                     arrTblBody = secBody[item.PROD];
                     secLbl[item.PROD] = item.PRODLBL;
                     if (typeof item.HR1_Pre_DTTM === 'undefined'){
-                        //alert('hi');
+                        alert('hi');
                     }
 
                     if (item.HR1_Pre_DTTM + item.HR1_Post_DTTM+ item.HR24_Post_DTTM  !== '') {
@@ -32787,7 +32778,7 @@ chla['PreOPAnVitals'].prototype.render = function() {
 					tempArray.push('<DIV><TABLE cellspacing="0" cellpadding="4" border="0" style="border-spacing:0px;width:100%"><TR class="lite-blue-row" style="width:100%"><TD>&nbsp;</TD><TD>&nbsp;</TD><TD>&nbsp;</TD><TD>&nbsp;</TD></TR>');
 					
 					item.HEART_BP_DETAILS.forEach(function(bp) {
-						tempArray.push('<TR><TD class="lite-blue-row" style="text-align:right;width:15%">' + bp.LABEL + '&nbsp;&nbsp;</TD><TD style="text-align:center;width:20%"><B>' + bp.VALUE + '</B></TD><TD style="text-align:center;width:20%">' + bp.DATE + '&nbsp;&nbsp;</TD><TD class="lite-blue-row" style="text-align:right;width:5%">&nbsp;&nbsp;</TD></TR>');
+						tempArray.push('<TR><TD class="lite-blue-row" style="text-align:right;width:25%">' + bp.LABEL + '&nbsp;&nbsp;</TD><TD style="text-align:right;width:40%"><B>' + bp.VALUE + '</B></TD><TD style="text-align:right;width:30%">' + bp.DATE + '&nbsp;&nbsp;</TD><TD class="lite-blue-row" style="text-align:right;width:5%">&nbsp;&nbsp;</TD></TR>');
 					});
 					
 					item.HEART_INFUSION_DETAILS.forEach(function(inf,idx) {
@@ -34762,8 +34753,7 @@ chla['PreOPAnVitals'].prototype.render = function() {
 			
 			$('#' + panelId + '_heart_icon_id2').on('click', function(e) {			
 				var winHeight = 250,
-					winWidth = 450;	
-										
+					winWidth = 450;			
 				var innerHTML = PreOPAnVitals.HeartPopUpPanel.buildPanel(DtoData.vitalsData);
 				PreOPAnVitals.VitalsPanel.vitalsData = DtoData.vitalsData;
 				if(PreOPAnVitals.VitalsPanel.vitalsData.HEMO_HIST_CHART1_SERIES.length > 0 || PreOPAnVitals.VitalsPanel.vitalsData.HEMO_HIST_CHART2_SERIES.length > 0) {
@@ -34942,8 +34932,7 @@ chla['PreOPAnVitals'].prototype.render = function() {
 					chartTargetDivId : panelId  + '_HEART_POPUP_CHARTGOESHERE',
 					panelId : panelId,
 					panelWidth : winWidth - 50,
-					marginLeft : 20
-					
+					marginLeft : 40
 				});
 			});
 			
@@ -34957,7 +34946,7 @@ chla['PreOPAnVitals'].prototype.render = function() {
 					chartTargetDivId : panelId  + '_HEART_POPUP_CHARTGOESHERE',
 					panelId : panelId,
 					panelWidth : winWidth - 50,
-					marginLeft : 20
+					marginLeft : 40
 				});
 			});
 			
@@ -34971,7 +34960,7 @@ chla['PreOPAnVitals'].prototype.render = function() {
 					chartTargetDivId : panelId  + '_HEART_POPUP_CHARTGOESHERE',
 					panelId : panelId,
 					panelWidth : winWidth - 50,
-					marginLeft : 20
+					marginLeft : 40
 				});
 			});
 			

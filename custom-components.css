@@ -80,9 +80,9 @@ div[id^='chla_'] table tr.odd {
 }
 
 .centerContents {
-	display: flex;
-	align-items: center;
-	justify-content: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 
@@ -3450,170 +3450,170 @@ div.inputQaCell2.eApps_hidden {
 /*  #AnesthResults css - Start
 /* ====================================================================================================== */
 
-    #AnesthResults h3#AnesthResultsRadiology_Header  {
-        background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    
-    #AnesthResults h3#AnesthResultsRadiology_Header.closed {
-        background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    #AnesthResults h3#AnesthResultsLaboratory_Header  {
-        background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    
-    #AnesthResults h3#AnesthResultsLaboratory_Header.closed {
-        background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    #AnesthResults h3#AnesthResultsMicro_Header  {
-        background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    
-    #AnesthResults h3#AnesthResultsMicro_Header.closed {
-        background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    #AnesthResults h3#AnesthResultsDocuments_Header  {
-        background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    
-    #AnesthResults h3#AnesthResultsDocuments_Header.closed {
-        background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
-        cursor: pointer;
-        padding-left: 20px;
-    }
-    
-    #AnesthResults  .sub-sec-content {
-        display: block;
-    }
-    #AnesthResults .sub-sec-content.closed {
-        display: none;
-    }
-    
-    #AnesthResults tr td.resultName {
-        color: blue;
-        cursor: pointer;
-        font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
-        font-size: 13px;
-        text-decoration: underline;
-    }
-    
-    h3 {
-        /*font-size: 16px;font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;*/
-    }
+#AnesthResults h3#AnesthResultsRadiology_Header  {
+    background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
 
-    #AnesthResults .sub-sec-content table tr td:first-child {
-		width:30%;
-		padding-left:20px;
-	}
-	.lab-results-hover-table {
-		/*  */
-	}
-	.lab-results-hover-table td {
-		padding: 2px 4px;
-		border: 1px solid #DDD;
-		border-collapse: collapse; 
-	}
-	.lab-results-hover-table th{
-		background: lightgrey; 
-		border: 1px solid white;
-		border-collapse: separate; 
-		border-spacing: 1px;
-		font-weight: normal; 
-		padding: 2px 4px;	
-		text-align: left;
-	}
+#AnesthResults h3#AnesthResultsRadiology_Header.closed {
+    background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
+#AnesthResults h3#AnesthResultsLaboratory_Header  {
+    background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
 
-    /* ******************** fish bones ******************** */
-    .coag-fishbone-display {
-        background-color: white;
-        font-size: 15px;
-        font-weight: bold;
-        width: 390px;
-        height: 100px;
-        margin-left: 0px;
-        background-position: top;
-    }
+#AnesthResults h3#AnesthResultsLaboratory_Header.closed {
+    background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
+#AnesthResults h3#AnesthResultsMicro_Header  {
+    background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
 
-    .cbc-fishbone-display {
-        background-color: white;
-        font-size: 15px;
-        font-weight: bold;
-        width: 390px;
-        height: 150px;
-        margin-left: 0px;
-        background-position: top;
-    }
+#AnesthResults h3#AnesthResultsMicro_Header.closed {
+    background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
+#AnesthResults h3#AnesthResultsDocuments_Header  {
+    background: #fff url('../eAppsResources/images/group-collapse.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
 
-    .chem-fishbone-display {
-        background-color: white;
-        font-size: 15px;
-        font-weight: bold;
-        width: 390px;
-        height: 100px;
-        margin-left: 0px;
-        background-position: top;
-    }
+#AnesthResults h3#AnesthResultsDocuments_Header.closed {
+    background: #fff url('../eAppsResources/images/group-expand.gif') no-repeat 5px;
+    cursor: pointer;
+    padding-left: 20px;
+}
 
-    .fishbone-clickable {
-        cursor: pointer;
-    }
-	
-	.callout-left::before {
-		content: "";
-		width: 0px;
-		height: 0px;
-		border: 0.8em solid transparent;
-		position: absolute;
-		right: -20px;
-		top: 0;
-		border-left: 10px solid grey;
-	}
-	
-	.callout-right::before {
-		content: "";
-		width: 0px;
-		height: 0px;
-		border: 0.8em solid transparent;
-		position: absolute;
-		left: -20px;
-		top: 0;
-		border-right: 10px solid grey;
-	}
-	
-	.callout-above::before {
-		content: "";
-		width: 0px;
-		height: 0px;
-		border: 0.8em solid transparent;
-		position: absolute;
-		left: 0;
-		bottom: -20px;
-		border-top: 10px solid grey;
-	}
-	
-	.callout-below::before {
-		content: "";
-		width: 0px;
-		height: 0px;
-		border: 0.8em solid transparent;
-		position: absolute;
-		left: 0;
-		top: -20px;
-		border-bottom: 10px solid grey;
-	}
+#AnesthResults  .sub-sec-content {
+    display: block;
+}
+#AnesthResults .sub-sec-content.closed {
+    display: none;
+}
+
+#AnesthResults tr td.resultName {
+    color: blue;
+    cursor: pointer;
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    font-size: 13px;
+    text-decoration: underline;
+}
+
+h3 {
+    /*font-size: 16px;font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;*/
+}
+
+#AnesthResults .sub-sec-content table tr td:first-child {
+    width:30%;
+    padding-left:20px;
+}
+.lab-results-hover-table {
+    /*  */
+}
+.lab-results-hover-table td {
+    padding: 2px 4px;
+    border: 1px solid #DDD;
+    border-collapse: collapse;
+}
+.lab-results-hover-table th{
+    background: lightgrey;
+    border: 1px solid white;
+    border-collapse: separate;
+    border-spacing: 1px;
+    font-weight: normal;
+    padding: 2px 4px;
+    text-align: left;
+}
+
+/* ******************** fish bones ******************** */
+.coag-fishbone-display {
+    background-color: white;
+    font-size: 15px;
+    font-weight: bold;
+    width: 390px;
+    height: 100px;
+    margin-left: 0px;
+    background-position: top;
+}
+
+.cbc-fishbone-display {
+    background-color: white;
+    font-size: 15px;
+    font-weight: bold;
+    width: 390px;
+    height: 150px;
+    margin-left: 0px;
+    background-position: top;
+}
+
+.chem-fishbone-display {
+    background-color: white;
+    font-size: 15px;
+    font-weight: bold;
+    width: 390px;
+    height: 100px;
+    margin-left: 0px;
+    background-position: top;
+}
+
+.fishbone-clickable {
+    cursor: pointer;
+}
+
+.callout-left::before {
+    content: "";
+    width: 0px;
+    height: 0px;
+    border: 0.8em solid transparent;
+    position: absolute;
+    right: -20px;
+    top: 0;
+    border-left: 10px solid grey;
+}
+
+.callout-right::before {
+    content: "";
+    width: 0px;
+    height: 0px;
+    border: 0.8em solid transparent;
+    position: absolute;
+    left: -20px;
+    top: 0;
+    border-right: 10px solid grey;
+}
+
+.callout-above::before {
+    content: "";
+    width: 0px;
+    height: 0px;
+    border: 0.8em solid transparent;
+    position: absolute;
+    left: 0;
+    bottom: -20px;
+    border-top: 10px solid grey;
+}
+
+.callout-below::before {
+    content: "";
+    width: 0px;
+    height: 0px;
+    border: 0.8em solid transparent;
+    position: absolute;
+    left: 0;
+    top: -20px;
+    border-bottom: 10px solid grey;
+}
 
 /* ====================================================================================================== */
 /*  #AnesthResults css - End
